@@ -161,7 +161,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eux
+          # -R is required: this job does not check the repository out, so gh
+          # has no git remote to infer the target from
+          # ("failed to run git: fatal: not a git repository").
           gh release create "$GITHUB_REF_NAME" \
+            -R "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             "${GITHUB_REF_NAME}-full.hex" \
