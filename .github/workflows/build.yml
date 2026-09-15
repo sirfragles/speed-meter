@@ -84,6 +84,16 @@ jobs:
       - name: Initialise west workspace
         run: |
           set -eux
+          # GitHub mounts its own HOME for container jobs, which hides the CMake
+          # package registry the image uses to advertise the Zephyr SDK
+          # (/home/user/.cmake/packages/Zephyr-sdk -> /opt/toolchains/...).
+          # ZEPHYR_SDK_INSTALL_DIR is a no-op on a normal machine but is the
+          # only thing that finds the SDK here. Discover the version rather
+          # than pinning it, so an image bump does not break the build.
+          sdk_dir=$(ls -d /opt/toolchains/zephyr-sdk-* | sort -V | tail -n1)
+          echo "ZEPHYR_SDK_INSTALL_DIR=$sdk_dir" >> "$GITHUB_ENV"
+          echo "Using Zephyr SDK at $sdk_dir"
+
           # `-l` reuses the checkout as the manifest repository instead of
           # cloning it again. Skipped when the cached workspace is restored.
           if [ ! -d .west ]; then
