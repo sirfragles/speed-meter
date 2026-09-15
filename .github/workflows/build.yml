@@ -92,6 +92,9 @@ jobs:
           west update --narrow
 
       - name: Build
+        # The zephyr-build image defaults to `sh` (dash), where the array
+        # syntax below is a syntax error - ask for bash explicitly.
+        shell: bash
         run: |
           set -eux
           args=(west build -b "$BOARD" "$APP_DIR" -d build --pristine=always)
