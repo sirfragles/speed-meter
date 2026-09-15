@@ -1,0 +1,24 @@
+# Build output
+build/
+build-*/
+
+# West workspace state (the Zephyr tree and its modules are fetched, never
+# committed - see west.yml for the pinned revisions).
+.west/
+/zephyr/
+/modules/
+/tools/
+/bootloader/
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+__pycache__/
+*.pyc
+
+# Measurement data captured from the device (ride1.csv, verify*.csv, ...).
+# Add them to the repository explicitly if a particular capture is worth
+# keeping as a reference.
+*.phase.csv

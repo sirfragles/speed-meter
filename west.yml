@@ -1,0 +1,45 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+#
+# West manifest for the Speed Meter application (T2 topology: this repository
+# is the manifest repository and the application lives in app/).
+#
+# Zephyr comes from the project fork rather than upstream, because the
+# accelerometer FIFO work the diagnostics build depends on is not upstream yet:
+#   - drivers/sensor/st/lis2dh/lis2dh_fifo.c, lis2dh_stream.c, lis2dh_rtio.c
+#   - CONFIG_LIS2DH_STREAM, CONFIG_LIS2DH_FIFO_POLL, CONFIG_LIS2DH_SHELL
+#   - the FIFO watermark devicetree binding
+#
+# The production build (prj.conf + power.conf + dfu.conf) does not use any of
+# that and also builds against a stock Zephyr; only app/stream.conf needs the
+# fork.
+#
+# Usage:
+#   west init -m https://github.com/sirfragles/speed-meter --mr main
+#   west update
+#   west build -b holyiot_25008/nrf54l15/cpuapp speed-meter/app --sysbuild -- \
+#       -DEXTRA_CONF_FILE="debug.conf;diag.conf;power.conf;dfu.conf"
+
+manifest:
+  version: "1.0"
+
+  remotes:
+    # The fork carries the LIS2DH FIFO work (see the note above). To build
+    # against stock Zephyr instead, point the project below at
+    # https://github.com/zephyrproject-rtos/zephyr and drop app/stream.conf.
+    - name: sirfragles
+      url-base: https://github.com/sirfragles
+
+  defaults:
+    remote: sirfragles
+
+  projects:
+    # Pinned to a commit, not a branch: a released firmware must be
+    # reproducible. Bump this deliberately when picking up driver changes.
+    - name: zephyr
+      remote: sirfragles
+      revision: a05da0a9daf49f34a8a03d07d5a04665a3da3109
+      import: true
+
+  self:
+    path: speed-meter

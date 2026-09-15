@@ -1,0 +1,19 @@
+/* Bootloader devicetree overlay.
+ *
+ * The bootloader must not touch P1.04/P1.05: P1.05 carries the LIS2DH12 INT1
+ * wake line. Disable uart20 so the UARTE driver never configures those pins.
+ *
+ * NOTE: when sysbuild sets DTC_OVERLAY_FILE for an image, MCUboot's own
+ * app.overlay (which selects the boot partition) is NOT auto-applied, so we
+ * must repeat it here - otherwise the bootloader links into slot0 (0x10000)
+ * instead of the boot partition (0x0) and never runs.
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &boot_partition;
+	};
+};
+
+&uart20 {
+	status = "disabled";
+};

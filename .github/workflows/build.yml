@@ -1,0 +1,156 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build every supported configuration of the Speed Meter firmware, and publish
+# the production images as a GitHub release when a v* tag is pushed.
+#
+# The build runs inside the same container image the project is developed with
+# (ghcr.io/zephyrproject-rtos/zephyr-build), so CI and a local build use an
+# identical toolchain - no SDK install step, no version drift.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BOARD: holyiot_25008/nrf54l15/cpuapp
+  APP_DIR: speed-meter/app
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # One job per configuration. fail-fast is off so a broken bench build still
+  # shows whether production is fine.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/zephyrproject-rtos/zephyr-build:main
+      # The image's default user cannot write into the mounted runner
+      # workspace, and west needs to create .west/, zephyr/ and modules/ there.
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Simulation only - builds with no hardware attached.
+          - name: base
+            conf: ""
+            sysbuild: false
+          # Hall sensor / reed contact on the `wheel-sensor` GPIO.
+          - name: gpio
+            conf: "debug.conf;gpio.conf"
+            sysbuild: false
+          # Bench: MCUmgr/SMP + the `wheel` diagnostics shell.
+          - name: bench
+            conf: "debug.conf;diag.conf"
+            sysbuild: false
+          # Bench + the driver's own LIS2DH FIFO shell (needs the fork).
+          - name: bench-fifo
+            conf: "debug.conf;diag.conf;stream.conf"
+            sysbuild: false
+          # Production: magnetless accelerometer source, three-tier power
+          # management, MCUboot and on-demand DFU over BLE.
+          - name: production
+            conf: "debug.conf;diag.conf;power.conf;dfu.conf"
+            sysbuild: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: speed-meter
+
+      # west update pulls a full Zephyr tree plus its modules (over a gigabyte),
+      # so keep it around between runs. Keyed on the manifest: bumping the
+      # pinned Zephyr revision invalidates the cache.
+      - name: Cache west workspace
+        uses: actions/cache@v4
+        with:
+          path: |
+            .west
+            zephyr
+            modules
+            tools
+          key: west-${{ runner.os }}-${{ hashFiles('speed-meter/west.yml') }}
+
+      - name: Initialise west workspace
+        run: |
+          set -eux
+          # `-l` reuses the checkout as the manifest repository instead of
+          # cloning it again. Skipped when the cached workspace is restored.
+          if [ ! -d .west ]; then
+            west init -l speed-meter
+          fi
+          west update --narrow
+
+      - name: Build
+        run: |
+          set -eux
+          args=(west build -b "$BOARD" "$APP_DIR" -d build --pristine=always)
+          if [ "${{ matrix.sysbuild }}" = "true" ]; then
+            args+=(--sysbuild)
+          fi
+          if [ -n "${{ matrix.conf }}" ]; then
+            args+=(-- "-DEXTRA_CONF_FILE=${{ matrix.conf }}")
+          fi
+          "${args[@]}"
+
+      - name: Upload firmware
+        if: matrix.name == 'production'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/merged_*.hex
+            build/app/zephyr/zephyr.signed.bin
+            build/app/zephyr/zephyr.signed.hex
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release. Only on a tag, and only once every configuration built.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: firmware
+
+      # Two images matter to a user, so give them names that say what they are:
+      #   <tag>-full.hex   flash over SWD (bootloader + signed application)
+      #   <tag>-dfu.bin    upload over BLE with an MCUmgr client
+      - name: Prepare assets
+        run: |
+          set -eux
+          cd firmware
+          merged=$(ls merged_*.hex | head -n1)
+          cp "$merged" "../${GITHUB_REF_NAME}-full.hex"
+          cp app/zephyr/zephyr.signed.bin "../${GITHUB_REF_NAME}-dfu.bin"
+          cp app/zephyr/zephyr.signed.hex "../${GITHUB_REF_NAME}-dfu.hex"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${GITHUB_REF_NAME}-full.hex" \
+            "${GITHUB_REF_NAME}-dfu.bin" \
+            "${GITHUB_REF_NAME}-dfu.hex"

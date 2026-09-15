@@ -1,0 +1,273 @@
+# SPDX-License-Identifier: Apache-2.0
+
+menu "Speed Meter application"
+
+config CSC_WHEEL_REV_DATA
+	bool "Wheel revolution data (speed)"
+	default y
+	help
+	  Expose wheel revolution data: CSC Feature bit 0 and wheel fields in
+	  every CSC Measurement notification. Required for speed readings.
+
+config CSC_CRANK_REV_DATA
+	bool "Crank revolution data (cadence)"
+	default n
+	help
+	  Expose crank revolution data: CSC Feature bit 1 and crank fields in
+	  every CSC Measurement notification.
+
+config CSC_SENSOR_LOCATION
+	int "Sensor Location characteristic value (0x2A5D)"
+	default 9
+	range 0 14
+	help
+	  Sensor location as defined by the Bluetooth SIG:
+	  0=Other, 1=Top of shoe, 2=In shoe, 3=Hip, 4=Front wheel,
+	  5=Left crank, 6=Right crank, 7=Left pedal, 8=Right pedal,
+	  9=Front hub, 10=Rear dropout, 11=Chainstay, 12=Rear wheel,
+	  13=Rear hub, 14=Chest.
+
+config CSC_SC_CONTROL_POINT
+	bool "SC Control Point characteristic (calibration, sensor location)"
+	default n
+	help
+	  Expose the optional SC Control Point (0x2A55) with SET CUMULATIVE
+	  VALUE, UPDATE SENSOR LOCATION and REQUEST SUPPORTED SENSOR
+	  LOCATIONS opcodes (CSCS v1.0). Ported from the upstream
+	  peripheral_csc sample - see reference/README.md.
+
+config CSC_BATTERY
+	bool "CR2032 voltage measurement through the SAADC VDD input"
+	default y
+	depends on ADC
+	help
+	  Measure the coin cell through the nRF54L15 SAADC's internal VDD input:
+	  no divider, no extra pin, nothing to solder (the channel lives in the
+	  board overlay as the first io-channel of the zephyr,user node).
+
+	  The voltage is published as a percentage through the standard BLE
+	  Battery Service. Turn this off to fall back to the fixed
+	  CSC_BAS_LEVEL instead, e.g. when the board is powered from a bench
+	  supply.
+
+config CSC_BATTERY_INTERVAL_RIDING_S
+	int "Battery measurement interval while riding (seconds)"
+	default 300
+	range 10 3600
+	depends on CSC_BATTERY
+	help
+	  A coin cell sags under load, so the level is sampled more often while
+	  the wheel is turning and the radio is busy.
+
+config CSC_BATTERY_INTERVAL_IDLE_S
+	int "Battery measurement interval while parked (seconds)"
+	default 3600
+	range 60 86400
+	depends on CSC_BATTERY
+	help
+	  Relaxed cadence for a device sitting still; the measurement itself is
+	  what costs power, not the timer.
+
+config CSC_BATTERY_CAL_PPM
+	int "Battery voltage calibration (parts per million)"
+	default 0
+	range -200000 200000
+	depends on CSC_BATTERY
+	help
+	  Single trim factor for the measured voltage. The SAADC is accurate but
+	  not exact, so compare the reported millivolts against a multimeter and
+	  set the relative error here: -30000 corrects a reading that is 3% too
+	  high. Watch out that a J-Link supplying the board makes the SAADC
+	  measure the debugger's rail, not the cell.
+
+config CSC_BAS_LEVEL
+	int "Battery level reported when measurement is off (percent)"
+	default 100
+	range 0 100
+	depends on BT_BAS
+	help
+	  Fallback published by the Battery Service (0x180F) when
+	  CONFIG_CSC_BATTERY is disabled. With measurement enabled this value is
+	  never used - the level comes from the SAADC.
+
+choice CSC_WHEEL_SOURCE
+	prompt "Wheel revolution source"
+	default CSC_SIMULATE
+	depends on CSC_WHEEL_REV_DATA
+	help
+	  Where wheel revolution data comes from.
+
+config CSC_SIMULATE
+	bool "Simulated wheel revolutions"
+	help
+	  Generate fake wheel revolutions so the sensor can be paired and
+	  tested with Apple Watch / a phone before the real wheel sensor
+	  hardware is attached.
+
+config CSC_WHEEL_SENSOR_GPIO
+	bool "Wheel sensor on GPIO (pulse input, alias 'wheel-sensor')"
+	help
+	  Count wheel revolutions from a pulse input on a GPIO - e.g. a Hall
+	  sensor or a magnetic pulse contact. The pin comes from the
+	  'wheel-sensor' devicetree alias (see the board overlay) and must be
+	  on a port with GPIOTE support - P0 or P1 on nRF54L15, P2 has none.
+
+config CSC_WHEEL_SENSOR_ACCEL
+	bool "Magnetless: revolutions from the accelerometer (LIS2DH)"
+	select SENSOR
+	select LIS2DH
+	select CSC_WHEEL_DETECTOR
+	help
+	  Count wheel revolutions from the gravity rotation the accelerometer
+	  sees - no magnet and no Hall sensor on the wheel. The detector is
+	  self-calibrating: the rotation plane, the axis signs and the
+	  sensor-to-axis distance are all derived from the data, so the board
+	  may be mounted in any orientation. Add power.conf to get automatic
+	  sleep on standstill and wake on movement. The sensor comes from the
+	  devicetree alias 'accel0'.
+
+endchoice
+
+config CSC_WHEEL_DETECTOR
+	bool
+	help
+	  Internal: build the self-calibrating revolution detector. Selected by
+	  the accelerometer wheel source and by the diagnostics recorder, both
+	  of which feed it. Not user selectable.
+
+config CSC_WHEEL_SENSOR_DEBOUNCE_MS
+	int "Wheel sensor debounce time in milliseconds"
+	default 20
+	range 1 200
+	depends on CSC_WHEEL_SENSOR_GPIO
+
+config CSC_SIM_WHEEL_RPS
+	int "Simulated wheel revolutions per second"
+	default 1
+	range 1 20
+	depends on CSC_SIMULATE
+
+config CSC_SIMULATE_CRANK
+	bool "Simulate crank revolutions"
+	default y
+	depends on CSC_CRANK_REV_DATA && CSC_SIMULATE
+	help
+	  Generate fake crank revolutions (cadence).
+
+config CSC_SIM_CRANK_RPM
+	int "Simulated crank revolutions per minute"
+	default 60
+	range 20 180
+	depends on CSC_SIMULATE_CRANK
+
+config CSC_SIM_TICK_MS
+	int "Simulation tick period in milliseconds"
+	default 100
+	range 10 1000
+	depends on CSC_SIMULATE
+
+config CSC_DIAG
+	bool "Remote diagnostics: accelerometer recording and calibration"
+	default n
+	depends on SENSOR && SHELL
+	select CSC_WHEEL_DETECTOR
+	help
+	  Shell commands for remote measurements over MCUmgr/SMP (used by
+	  tools/wheel_cal.py): wheel status, cal get/set and accelerometer
+	  recording (record start/stop/info/dump). Enable together with
+	  diag.conf.
+
+config CSC_DIAG_REC_SAMPLES
+	int "Wheel diagnostics recording buffer size (samples)"
+	default 4096
+	range 256 16384
+	depends on CSC_DIAG
+
+config CSC_POWER_SAVE
+	bool "Low-power mode: sleep on wheel standstill"
+	default n
+	depends on SPI
+	help
+	  Puts the LIS2DH12 into a 1 Hz low-power mode with a movement interrupt
+	  armed on the selected INT line whenever the wheel stops, so the SoC may
+	  sleep and wake on rotation. The actual SoC sleep is provided by
+	  CONFIG_CSC_POWER_SYSTEM_OFF and wheel_power_soc_suspend/resume.
+
+choice CSC_POWER_WAKE_INT
+	prompt "Interrupt line that wakes the SoC"
+	default CSC_POWER_WAKE_INT1
+	depends on CSC_POWER_SAVE
+
+config CSC_POWER_WAKE_INT1
+	bool "INT1"
+
+config CSC_POWER_WAKE_INT2
+	bool "INT2"
+
+endchoice
+
+config CSC_POWER_IDLE_TIMEOUT_S
+	int "Standstill timeout before sleeping (seconds)"
+	default 10
+	range 2 300
+	depends on CSC_POWER_SAVE
+	help
+	  Tier 2 of the power state machine: after this long without a wheel
+	  revolution the sensor alone drops to 1 Hz with a movement interrupt.
+	  The BLE link is kept - stopping at a traffic light must not cost the
+	  rider their connection - and the CPU stays idle between connection
+	  events, which is where the saving is.
+
+config CSC_POWER_DEEP_SLEEP_TIMEOUT_S
+	int "Standstill timeout before disconnecting and powering down (seconds)"
+	default 300
+	range 30 3600
+	depends on CSC_POWER_SAVE && CSC_POWER_SYSTEM_OFF
+	help
+	  Tier 3: after this long without a revolution the ride is considered
+	  over. The device drops its BLE links and enters System OFF; the first
+	  wheel movement wakes it and the watch reconnects by itself.
+
+	  This is what makes a year on a CR2032 possible: without it a connected
+	  client would keep the device awake around the clock. It must stay well
+	  above the traffic-light scale - the default of 5 minutes is the
+	  behaviour of the commercial speed sensors.
+
+config CSC_POWER_WAKE_THS
+	int "Wake threshold (INTx_THS, in +/-2g digits)"
+	default 16
+	range 1 127
+	depends on CSC_POWER_SAVE
+	help
+	  Each digit is 16 mg at the standby full scale (+/-2 g). 16 digits means
+	  a ~256 mg movement wakes the device.
+
+config CSC_POWER_SYSTEM_OFF
+	bool "Enter System OFF in standby (event-driven wake on P0/P1)"
+	default n
+	depends on CSC_POWER_SAVE && POWEROFF
+	help
+	  wheel_power_soc_suspend() arms the selected INT pin for GPIO SENSE and
+	  calls sys_poweroff(); the INT event then reboots the chip. Keep this off
+	  during bring-up: after System OFF the debugger only reconnects after a
+	  wake event.
+
+config CSC_DFU
+	bool "On-demand firmware update (DFU) over BLE"
+	default n
+	depends on MCUMGR_TRANSPORT_BT_DYNAMIC_SVC_REGISTRATION && MCUMGR_GRP_IMG
+	help
+	  Hides the MCUmgr/SMP service until dfu_mode_enter() is called (e.g. by
+	  a long button press). The device then advertises as "Wheel DFU" and a
+	  phone uploads a signed image to the second slot; MCUboot installs it on
+	  the next reboot. Enable together with dfu.conf.
+
+config CSC_DFU_BUTTON_LONG_MS
+	int "DFU button hold duration (milliseconds)"
+	default 5000
+	range 1000 10000
+	depends on CSC_DFU
+
+endmenu
+
+source "Kconfig.zephyr"
