@@ -101,6 +101,8 @@ app/                      the firmware
 ├── boards/               board devicetree overlay (SAADC battery channel, ...)
 ├── sysbuild/             MCUboot configuration
 └── src/                  a module per concern, see app/README.md
+tests/wheel_detector/     replay tests for the detector (native_sim)
+scripts/                  CI helpers (footprint summary)
 ```
 
 ### Zephyr dependency
@@ -150,6 +152,37 @@ docker run --rm -v "$PWD":/workdir ghcr.io/zephyrproject-rtos/zephyr-build:main 
 
 > `stream.conf` registers a driver interrupt handler on INT1, which
 > `power.conf` uses for System OFF wake arming — do not combine them.
+
+---
+
+## Testing
+
+The revolution detector (`app/src/wheel_detector.c`) makes no Zephyr calls on
+purpose, so it is tested by replaying motion recorded from a real board through
+the production source file — no hardware, no cross toolchain:
+
+```sh
+west twister -T tests/wheel_detector -p native_sim/native/64
+```
+
+Four captures in `tests/wheel_detector/fixtures/` hold real wheel motion taken
+over BLE with `app/tools/wheel_cal.py`. The expected revolution counts are
+pinned in the test, so a change in detector behaviour fails the build instead of
+quietly changing the speeds it reports.
+
+See [`tests/wheel_detector/README.md`](tests/wheel_detector/README.md) for what
+the captures are, and for the two defects the tests record as things stand: one
+capture that never locks, and a radius fit that does not converge.
+
+### What CI runs
+
+| Job | What it checks |
+|---|---|
+| `detector replay` | the detector against the recorded captures |
+| `build` | all five configurations; a ROM/RAM report lands in the run summary |
+| `Release` | on a `v*` tag, publishes the three firmware images |
+
+Every action is pinned to a commit SHA, the way Zephyr pins its own workflows.
 
 ---
 
