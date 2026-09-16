@@ -15,6 +15,7 @@
  * the firmware produces for that data - not a model of them.
  */
 
+#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -95,6 +96,11 @@ struct replay {
 	uint32_t still_windows;
 	float noise_last;
 	float gate_last;
+
+	/* Max-minus-min per axis over the WHOLE capture, in mg - the same quantity
+	 * the still window measures. If a window's noise is close to this, that
+	 * window was open while the wheel was moving. */
+	float p2p_mg[3];
 };
 
 static struct replay replay_capture(const struct fixture *fx)
@@ -114,6 +120,22 @@ static struct replay replay_capture(const struct fixture *fx)
 	zassert_true(wheel_detector_init(&det, &cfg),
 		     "%s: wheel_detector_init rejected the production config",
 		     fx->name);
+
+	for (int k = 0; k < 3; k++) {
+		float lo = FLT_MAX;
+		float hi = -FLT_MAX;
+
+		for (size_t i = 0; i < fx->count; i++) {
+			float v = (k == 0) ? fx->samples[i].x_ms2
+				: (k == 1)   ? fx->samples[i].y_ms2
+					     : fx->samples[i].z_ms2;
+
+			lo = fminf(lo, v);
+			hi = fmaxf(hi, v);
+		}
+
+		out.p2p_mg[k] = (hi - lo) * (1000.0f / 9.80665f);
+	}
 
 	for (size_t i = 0; i < fx->count; i++) {
 		const struct fixture_sample *s = &fx->samples[i];
@@ -225,6 +247,14 @@ ZTEST(wheel_detector, test_replay_recorded_captures)
 		       "noise=%.2f gate=%.2f\n",
 		       r.moving_samples, fx->count, r.still_windows,
 		       (double)r.noise_last, (double)r.gate_last);
+		/* The still window measures max-minus-min on one axis; so does this,
+		 * but over everything. Comparable numbers mean the window was open
+		 * through motion instead of through rest. */
+		printk("                 whole capture, per axis (mg): "
+		       "x=%.0f y=%.0f z=%.0f; still window saw %.0f mg\n",
+		       (double)r.p2p_mg[0], (double)r.p2p_mg[1],
+		       (double)r.p2p_mg[2],
+		       (double)(r.noise_last * (1000.0f / 9.80665f)));
 
 		zassert_equal(r.locked, want->locks,
 			      "%s: lock state changed (recorded %s)",

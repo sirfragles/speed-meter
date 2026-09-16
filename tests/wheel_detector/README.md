@@ -78,6 +78,24 @@ Measured across the four captures:
 | `verify10` | **48/1710** | 33 | **6.42** | **25.69** | **0** |
 | `verify_manual` | 3669/4096 | 0 | 0.00 | 0.50 | 1 |
 
+The replay also prints the largest per-axis excursion over the whole capture —
+the same quantity the still window measures, but over everything instead of
+the last 50 samples. It exists to answer one question: was that window open
+through rest or through motion?
+
+| Capture | whole capture, per axis (mg) | still window saw |
+| --- | --- | ---: |
+| `autocal_capture` | x=2624 y=2484 z=2624 | 0 |
+| `ride1` | x=1932 y=2073 z=3064 | 0 |
+| `verify10` | x=844 y=1311 **z=1827** | **655** |
+| `verify_manual` | x=1921 y=1405 z=2624 | 0 |
+
+For `verify10` the window saw 655 mg against a full range of 1827 mg: a third
+of the capture's excursion, roughly two orders of magnitude above sensor rest
+noise. It was open while the wheel was turning. The three captures that lock
+report 0 — their windows closed on a genuinely stationary wheel, which is why
+they never latch.
+
 An earlier version of this file said "it is not a gate problem: the samples *do*
 exceed the gate". That was measured against the raw sample-to-sample change,
 which is not what the gate compares — it compares against the running mean
