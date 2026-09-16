@@ -71,6 +71,39 @@ struct wheel_detector_result {
 	float confidence;    /* 0..1, quality of the current estimate */
 };
 
+/**
+ * @brief What the calibration actually did.
+ *
+ * "It did not lock" is otherwise unanswerable from the outside: these counters
+ * say whether the plane fit was attempted at all, what quality it rejected, and
+ * whether the calibration window was sliding instead of settling.
+ *
+ * Named rather than anonymous so that a caller which owns a detector - the
+ * sampling source, the diagnostics shell - can take a copy and show it without
+ * reaching into the detector's internals.
+ */
+struct wheel_detector_stats {
+	uint32_t plane_attempts;
+	uint32_t plane_successes;
+	uint32_t window_slides;
+	uint32_t phase_resets;
+	float last_quality;
+	float best_quality;
+
+	/*
+	 * The movement gate, which has to be passed before any of the above can
+	 * happen. It is max(4 * noise, still_gate_ms2), and the noise estimate is
+	 * fed by the samples the gate itself rejected - so a window opened during
+	 * motion raises the gate above the gravity circle and latches the detector
+	 * out of every state that could recover it. These four fields are what
+	 * makes that visible on a board and not only in a fixture.
+	 */
+	uint32_t moving_samples;
+	uint32_t still_windows;
+	float noise_last;
+	float gate_last;
+};
+
 struct wheel_detector {
 	struct wheel_detector_config cfg;
 
@@ -123,29 +156,8 @@ struct wheel_detector {
 	double period_hist[4]; /* recent periods (newest first), median filtered */
 	uint32_t period_n;
 
-	/*
-	 * What the calibration actually did.
-	 *
-	 * "It did not lock" is otherwise unanswerable from the outside: this says
-	 * whether the plane fit was attempted at all, what quality it rejected,
-	 * and whether the calibration window was sliding instead of settling.
-	 */
-	struct {
-		uint32_t plane_attempts;
-		uint32_t plane_successes;
-		uint32_t window_slides;
-		uint32_t phase_resets;
-		float last_quality;
-		float best_quality;
-
-		/* The movement gate, which has to be passed before any of the
-		 * above can happen: it is max(4 * noise, still_gate) and the noise
-		 * estimate is fed by the samples the gate itself rejected. */
-		uint32_t moving_samples;
-		uint32_t still_windows;
-		float noise_last;
-		float gate_last;
-	} stats;
+	/* See struct wheel_detector_stats. */
+	struct wheel_detector_stats stats;
 };
 
 /**

@@ -26,6 +26,10 @@
 #include "wheel_power.h"
 #endif
 
+#if IS_ENABLED(CONFIG_CSC_WHEEL_SENSOR_ACCEL)
+#include "wheel_source_accel.h"
+#endif
+
 #if IS_ENABLED(CONFIG_CSC_BATTERY)
 #include "battery.h"
 #endif
@@ -241,6 +245,49 @@ static void print_cal(const struct shell *sh)
 	shell_print(sh, "cal: odr_hz=%u range_g=%u", c->odr_hz, c->range_g);
 }
 
+#if IS_ENABLED(CONFIG_CSC_WHEEL_SENSOR_ACCEL)
+/*
+ * The production detector, not the one this shell drives for its own recording.
+ * Those are two different instances, and only this one counts the wheel - so
+ * without this, `wheel status` would answer a question nobody asked.
+ */
+static void print_source_det(const struct shell *sh)
+{
+	struct wheel_detector_stats st;
+	struct wheel_detector_result last;
+
+	if (!wheel_source_accel_detector_stats(&st, &last)) {
+		shell_print(sh, "src: accelerometer source has no detector");
+		return;
+	}
+
+	shell_print(sh,
+		    "src: state=%s revs=%u rpm=%d.%d plane_try=%u ok=%u slides=%u resets=%u",
+		    det_state_name(last.state), last.revolutions,
+		    (int)last.rpm, (int)(last.rpm * 10.0f) % 10,
+		    st.plane_attempts, st.plane_successes, st.window_slides,
+		    st.phase_resets);
+
+	/*
+	 * The gate in mg, next to the noise that produced it, because that is the
+	 * pair that decides whether the detector can move at all: the gate is
+	 * max(4 * noise, still_gate) and the noise is measured on the samples the
+	 * gate rejected. Once the gate passes the gravity circle - about 2 g, the
+	 * most the sensor can show - nothing can be moving any more, and the
+	 * detector stays in IDLE permanently. That is the LATCHED flag.
+	 */
+	shell_print(sh,
+		    "src: q_last=%d.%02d q_best=%d.%02d gate moving=%u still=%u "
+		    "noise=%dmg gate=%dmg%s",
+		    (int)st.last_quality, (int)(st.last_quality * 100.0f) % 100,
+		    (int)st.best_quality, (int)(st.best_quality * 100.0f) % 100,
+		    st.moving_samples, st.still_windows,
+		    (int)(st.noise_last / 9.80665f * 1000.0f),
+		    (int)(st.gate_last / 9.80665f * 1000.0f),
+		    (st.gate_last > 2.0f * 9.80665f) ? " LATCHED" : "");
+}
+#endif
+
 static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 {
 	ARG_UNUSED(argc);
@@ -269,6 +316,9 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 			    (int)(det_last.radial_dir[1] * 1000.0f),
 			    (int)(det_last.radial_dir[2] * 1000.0f));
 	}
+#if IS_ENABLED(CONFIG_CSC_WHEEL_SENSOR_ACCEL)
+	print_source_det(sh);
+#endif
 	print_cal(sh);
 	return 0;
 }
@@ -559,11 +609,40 @@ static int cmd_battery(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
+#if IS_ENABLED(CONFIG_CSC_WHEEL_SENSOR_ACCEL)
+/*
+ * `wheel stats` reads and clears the production source's counters. Two sets,
+ * two questions: the source counters say how the bus behaved, the detector
+ * counters say whether the calibration could start at all. Cleared together
+ * because they are read together, after a run with a known revolution count.
+ */
+static int cmd_stats(const struct shell *sh, size_t argc, char **argv)
+{
+	struct wheel_source_stats src;
+
+	if (argc > 1 && !strcmp(argv[1], "reset")) {
+		wheel_source_accel_stats_reset();
+		wheel_source_accel_detector_stats_reset();
+		shell_print(sh, "stats: reset");
+		return 0;
+	}
+
+	wheel_source_accel_stats(&src);
+	shell_print(sh, "src: samples=%u no_data=%u lost=%u",
+		    src.samples, src.no_data, src.lost);
+	print_source_det(sh);
+	return 0;
+}
+#endif
+
 SHELL_STATIC_SUBCMD_SET_CREATE(wheel_cmds,
 	SHELL_CMD(status, NULL, "Show status and calibration", cmd_status),
 	SHELL_CMD_ARG(accel, NULL, "Read accel: accel [count] [odr_hz] [range_g]", cmd_accel, 1, 3),
 	SHELL_CMD(cal, &sub_cal, "Calibration parameters", NULL),
 	SHELL_CMD(record, &sub_record, "Accelerometer recording", NULL),
+#if IS_ENABLED(CONFIG_CSC_WHEEL_SENSOR_ACCEL)
+	SHELL_CMD_ARG(stats, NULL, "Source and calibration counters: stats [reset]", cmd_stats, 1, 1),
+#endif
 #if IS_ENABLED(CONFIG_CSC_POWER_SAVE)
 	SHELL_CMD_ARG(power, NULL, "power <active|standby> (low-power control)", cmd_power, 1, 1),
 #endif

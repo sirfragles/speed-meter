@@ -157,4 +157,59 @@ ZTEST(wheel_source, test_a_stale_deadline_is_rebased_not_chased)
 		     next_us, now);
 }
 
+/*
+ * The shell has a detector of its own for its own recording, so `wheel status`
+ * would happily describe that one and never the detector that counts the wheel
+ * - healthy-looking output for a wheel that is not being counted at all. These
+ * counters are the only view of the production detector from outside the
+ * sampling thread, and they are what the plan's hardware session reads to tell
+ * "the calibration rejected the data" from "the calibration never started".
+ *
+ * Numbers here are deterministic, not sampled: the fake sensor is constant, so
+ * the movement gate never opens and the still window closes exactly once.
+ */
+ZTEST(wheel_source, test_the_production_detectors_counters_are_visible)
+{
+	struct wheel_detector_stats st;
+	struct wheel_detector_result last;
+
+	zassert_true(wheel_source_accel_detector_stats(&st, &last),
+		     "the source reports no detector after a successful init");
+
+	wheel_source_accel_detector_stats_reset();
+	zassert_true(wheel_source_accel_detector_stats(&st, &last), "...");
+	zassert_equal(st.still_windows, 0U, "reset did not clear the counters");
+
+	step(60);
+
+	zassert_true(wheel_source_accel_detector_stats(&st, &last),
+		     "the counters stopped being readable once sampling started");
+
+	zassert_equal(st.still_windows, 1U,
+		      "a constant sensor should close exactly one still window, "
+		      "not %u", st.still_windows);
+	zassert_equal(st.moving_samples, 0U,
+		      "a still sensor was classified as moving %u times",
+		      st.moving_samples);
+
+	/*
+	 * The gate must sit on its configured floor while the wheel is still.
+	 * If it ever rises above the gravity circle - about 2 g - nothing can be
+	 * moving again and the detector never leaves IDLE, which is the failure
+	 * the replay found in one of the recordings. A still sensor is the case
+	 * where that must be impossible.
+	 */
+	zassert_within(st.gate_last, 0.5f, 0.001f,
+		       "the gate left its floor while the sensor was still: "
+		       "%.3f m/s2", (double)st.gate_last);
+	zassert_within(st.noise_last, 0.0f, 0.001f,
+		       "a constant sensor produced %.3f m/s2 of noise",
+		       (double)st.noise_last);
+	zassert_equal(st.plane_attempts, 0U,
+		      "a still wheel started a calibration");
+
+	zassert_equal(last.state, WHEEL_STATE_IDLE, "the detector left IDLE");
+	zassert_equal(last.revolutions, 0U, "a still wheel produced revolutions");
+}
+
 ZTEST_SUITE(wheel_source, NULL, suite_setup, before_each, NULL, NULL);

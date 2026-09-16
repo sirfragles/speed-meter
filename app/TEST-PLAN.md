@@ -101,7 +101,22 @@ export PYTHONPATH=/Users/matthew/lis2dh-zephyr-fifo/.tools/pylib312; PY=/opt/hom
 U=$(cat /tmp/board_uuid.txt)          # B1B6B9B1-20A3-7CA5-A452-F30885CBF625
 $PY -m smpmgr --ble $U --timeout 15 shell "wheel status"
 ```
+**`wheel status` i `wheel stats` pokazują dwa różne detektory.** Shell
+diagnostyczny ma własną instancję, której używa do własnego nagrywania; obroty
+koła liczy ta w `wheel_source_accel.c`. `wheel status` opisuje pierwszą, więc
+przy diagnozie „koło się kręci, a prędkości nie ma" patrzeć na:
 
+```sh
+$PY -m smpmgr --ble $U --timeout 15 shell "wheel stats"
+```
+
+Wypisuje liczniki źródła (`samples` / `no_data` / `lost`) oraz kalibracji
+produkcyjnego detektora: liczbę podejść do dopasowania płaszczyzny, jej jakość,
+przesunięcia okna, resety fazy, oraz bramkę ruchu w mg. **`gate` powyżej ~2 g
+oznacza `LATCHED`** — bramka urosła ponad to, co akcelerometr potrafi pokazać,
+więc nic już nie może zostać uznane za ruch i detektor zostaje w IDLE na stałe.
+To zmierzona przyczyna jednego z czterech przechwytów w
+`tests/wheel_detector/`. `wheel stats reset` zeruje oba zestawy przed próbą.
 - Dla pewności skan: `tools/wheel_cal.py scan` → ma być „Speed Meter” + CSCS `0x1816`
   (w diag także SMP `0xFEBB`).
 - Logi boota po RTT: `rm -f /tmp/rtt.log && JLinkRTTLogger -device nRF54L15_M33 -if SWD -speed 4000 -RTTChannel 0 /tmp/rtt.log`

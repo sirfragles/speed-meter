@@ -49,6 +49,11 @@ static const struct device *const accel = DEVICE_DT_GET(ACCEL_NODE);
 static struct wheel_detector det;
 static bool det_ready;
 
+/* Most recent detector result - only the diagnostics shell reads it, but it is
+ * the only way to see the production detector's speed and state from outside
+ * the sampling thread. */
+static struct wheel_detector_result last_result;
+
 /* Poll period while wheel_power holds the sensor in its 1 Hz standby mode:
  * slow enough to cost nothing, fast enough to notice the wheel moving again. */
 #define STANDBY_POLL_US 1000000U
@@ -73,6 +78,27 @@ void wheel_source_accel_stats(struct wheel_source_stats *out)
 void wheel_source_accel_stats_reset(void)
 {
 	stats = (struct wheel_source_stats){ 0 };
+}
+
+bool wheel_source_accel_detector_stats(struct wheel_detector_stats *stats_out,
+				       struct wheel_detector_result *last)
+{
+	if (!det_ready) {
+		return false;
+	}
+
+	*stats_out = det.stats;
+
+	if (last != NULL) {
+		*last = last_result;
+	}
+
+	return true;
+}
+
+void wheel_source_accel_detector_stats_reset(void)
+{
+	det.stats = (struct wheel_detector_stats){ 0 };
 }
 
 static uint64_t now_us(void)
@@ -283,6 +309,8 @@ void wheel_source_accel_step(uint64_t *next_us, uint32_t *period_us)
 				    (float)v[0].val1 + (float)v[0].val2 / 1000000.0f,
 				    (float)v[1].val1 + (float)v[1].val2 / 1000000.0f,
 				    (float)v[2].val1 + (float)v[2].val2 / 1000000.0f);
+
+	last_result = res;
 
 	if (res.new_revolution) {
 		publish_revolution(&res);

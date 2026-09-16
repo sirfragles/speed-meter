@@ -23,7 +23,10 @@
 #ifndef SPEED_METER_WHEEL_SOURCE_ACCEL_H_
 #define SPEED_METER_WHEEL_SOURCE_ACCEL_H_
 
+#include <stdbool.h>
 #include <stdint.h>
+
+#include "wheel_detector.h"
 
 /**
  * @brief How the source classified the outcomes of its bus accesses.
@@ -51,6 +54,32 @@ void wheel_source_accel_stats(struct wheel_source_stats *out);
 
 /** @brief Zero the counters. */
 void wheel_source_accel_stats_reset(void);
+
+/**
+ * @brief The production detector's calibration counters, and its last result.
+ *
+ * The diagnostics shell has a detector of its own for its own recording, so
+ * `wheel status` would otherwise describe that one and never the detector which
+ * counts the wheel. These are the same numbers the offline replay prints, which
+ * is what makes a revolution count observed on a board diagnosable instead of
+ * merely reported.
+ *
+ * @param stats  copied counter set, unchanged on entry
+ * @param last   optional; the detector's most recent result
+ * @return true if the detector has been initialised, false if the copy is not
+ *         meaningful
+ */
+bool wheel_source_accel_detector_stats(struct wheel_detector_stats *stats,
+				       struct wheel_detector_result *last);
+
+/**
+ * @brief Zero the production detector's calibration counters.
+ *
+ * Not the sample counters - see wheel_source_accel_stats_reset(). Separate
+ * because the two answer different questions and are read after different
+ * experiments.
+ */
+void wheel_source_accel_detector_stats_reset(void);
 
 /**
  * @brief One pass of the sampling loop.
