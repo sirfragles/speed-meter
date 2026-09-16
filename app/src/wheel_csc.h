@@ -58,10 +58,19 @@ struct wheel_csc_sample wheel_csc_revolution(struct wheel_csc *csc,
 					     int64_t now_ms);
 
 /**
- * @brief Apply SET CUMULATIVE VALUE from the SC Control Point.
+ * @brief Re-base the counter, as SET CUMULATIVE VALUE asks.
  *
- * The host may re-base the counter at any time; afterwards the next
- * revolution is that value plus one.
+ * Afterwards the next revolution reports @p revolutions + 1. This is the
+ * wire contract in the form this module owns it.
+ *
+ * It is NOT the running code path, and that is deliberate. The SC Control
+ * Point is served by csc.c, which re-bases at the publish point as
+ * `reported = raw + offset`. That layer has to be source agnostic: the GPIO
+ * source publishes through the same function but has no wheel_csc state to
+ * re-base. Applying the offset here as well as there would count it twice.
+ *
+ * So the test for this function pins what the request must mean; it does not
+ * exercise the offset that actually runs.
  */
 void wheel_csc_set_cumulative(struct wheel_csc *csc, uint32_t revolutions);
 

@@ -118,6 +118,13 @@ ZTEST(wheel_csc, test_counter_never_decreases)
 	}
 }
 
+/*
+ * What SET CUMULATIVE VALUE has to mean, not the code that serves it. The SC
+ * Control Point is handled in csc.c, which re-bases at the publish point
+ * because it has to work for every source - the GPIO source has no wheel_csc
+ * to re-base. This test therefore covers the contract, not that offset; the
+ * gap is recorded in the plan rather than papered over by a passing test.
+ */
 ZTEST(wheel_csc, test_set_cumulative_value_rebases_the_counter)
 {
 	struct wheel_csc csc;
