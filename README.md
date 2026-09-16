@@ -32,12 +32,14 @@ device awake around the clock.
 |---|---|---|---|---|
 | 1 — riding | wheel turns | 100 Hz | CSC ≈ 1 Hz | woken per sample |
 | 2 — standstill | 10 s without a revolution | 1 Hz + motion interrupt | link **kept** | idle between events |
-| 3 — ride over | 5 min without a revolution | 1 Hz + motion interrupt | links dropped | **System OFF** |
+| 3 — ride over | 5 min without a revolution | 1 Hz | links dropped | **System ON Idle** |
 
 Stopping at a traffic light must not cost the rider the watch connection, so
-tier 2 keeps the link up. Tier 3 is the deep sleep: the first wheel movement
-wakes the chip through INT1 (P1.05) and the watch reconnects from its stored
-bond on its own.
+tier 2 keeps the link up. Tier 3 is as deep as this board can go: the links and
+the advertising stop, the CPU idles between polls, and the 1 Hz wheel poll is
+its own wake source — the wheel starts the device again by itself, with nothing
+pressed and nothing soldered. Why not System OFF is in the configuration
+section below.
 
 ### Battery
 
@@ -148,35 +150,36 @@ docker run --rm -v "$PWD":/workdir ghcr.io/zephyrproject-rtos/zephyr-build:main 
 | gpio | `debug.conf;gpio.conf` | no | Hall sensor / reed contact on a GPIO |
 | bench | `debug.conf;diag.conf` | no | MCUmgr/SMP + `wheel` diagnostics shell |
 | bench-fifo | `debug.conf;diag.conf;stream.conf` | no | adds the LIS2DH FIFO shell |
-| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` | **yes** | magnetless source, sleep/wake, DFU — **needs the INT1 wire** |
-| **stock** | `debug.conf;diag.conf;stock.conf;dfu.conf` | **yes** | the same firmware for a board with **no modifications** |
+| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` | **yes** | magnetless source, three-tier standstill policy, DFU |
 
 > `stream.conf` registers a driver interrupt handler on INT1, which
-> `power.conf` uses for System OFF wake arming — do not combine them.
+> `power.conf` uses for its standstill interrupt — do not combine them.
 
-### Which one to flash
+### There is one production image, and no way to wake from System OFF
 
-The two production variants differ in exactly one thing, and it is a hardware
-fact rather than a preference: whether the LIS2DH12 INT1 is wired to P1.05.
+The wheel still starts the device by itself, but by polling rather than by a
+hardware event, and the reason is a property of the board rather than a
+preference:
 
-| | `production` | `stock` |
-|---|---|---|
-| INT1 wire | required | none |
-| Tier 2 (sensor 1 Hz, link kept) | yes | yes |
-| Tier 3, parking | System OFF, wake on rotation | **System ON Idle**, radio off |
-| Chip while parked | powered down | CPU in WFI; RAM, LFCLK, GRTC running |
-| What wakes it | INT1 on P1.05, a reboot | the 1 Hz poll, from the sampling thread |
-| Battery | a year on a CR2032 | a few µA more; the radio, not the core, is the load |
+| | |
+|---|---|
+| Tier 2, 10 s | sensor to 1 Hz, BLE link kept |
+| Tier 3, 300 s | links dropped, advertising stopped, **System ON Idle** |
+| Chip while parked | CPU in WFI; RAM, LFCLK, GRTC running |
+| What wakes it | the 1 Hz poll, from the sampling thread |
 
-`stock.conf` cannot reach System OFF even by accident: the option depends on
-`CSC_POWER_WAKE_LINE_WIRED`, which only `power.conf` sets, so setting it on an
-unmodified board is a Kconfig error rather than a device that powers down and
-never comes back.
+Waking from System OFF needs GPIO DETECT on P0/P1 — there is no timer wake on
+this part — and the module wires the accelerometer's INT1 and INT2 to P2.00 and
+P2.03. Port 2 carries no `gpiote-instance` in the SoC devicetree (`gpiote30`
+belongs to `gpio0`, `gpiote20` to `gpio1`), and the board cannot usefully be
+modified, so there is no wake source at all. Arming one would power the device
+down and never bring it back.
 
-That gate protects against a wrong *configuration*, not against flashing the
-wrong *file*: a `production` image on an unmodified board still goes to System
-OFF. Both file headers say so, and the failure is one reset away from recovery
-rather than permanent.
+The cost is battery life, not function: advertising every 100 ms plus a
+maintained link runs to tens of microamps, while the core idling between two
+1 Hz polls costs a few. **That gap is unmeasured** — section 8 of
+`app/TEST-PLAN.md` specifies how to measure it, and whether buying it back is
+worth a button press is a decision for after that measurement.
 
 ---
 
@@ -289,13 +292,11 @@ same firmware. Bump the pin deliberately to pick up driver changes.
 - **Never short a wheel sensor to a P2 pin.** Port 2 on nRF54L15 has no GPIOTE
   and no SENSE/DETECT, so it can neither raise an interrupt nor wake the chip —
   P2 is polling-only.
-- **P1.05 is UART RX.** Driving the LIS2DH12 INT1 into it requires a **physical
-  modification of the board** — it is not how the module ships. Without that
-  wire everything works except the wake from System OFF: tier 3 of the power
-  state machine will not come back on its own. `uart20` is disabled everywhere
-  and logging goes over RTT (J-Link), so a bootloader that enables UART cannot
-  fight the INT1 push-pull output. **Flash the `stock` variant if you have not
-  made the modification**, and `production` if you have.
+- **P1.05 is UART RX, and wiring INT1 to it is not available.** It would take a
+  physical modification of the board, and the board cannot usefully be modified.
+  Without that wire there is no wake source for System OFF, so tier 3 stays in
+  System ON Idle and polls instead — see the configuration section. `uart20` is
+  disabled everywhere and logging goes over RTT (J-Link).
 
 ---
 

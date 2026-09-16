@@ -33,13 +33,18 @@
  *           stop at a traffic light does not drop the watch connection, and the
  *           CPU stays idle between connection events.
  *   tier 3  beyond WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S
- *           the ride is over: links dropped, advertising stopped. What sleeps
- *           then depends on the board. With System OFF the SoC powers down and
- *           the next wheel movement is a reboot; without a wake line only the
- *           radio sleeps and the device stays in System ON Idle - the CPU
- *           stopping in WFI between 1 Hz polls, everything else still powered -
- *           with that poll itself as the wake source. It works on any board, at
- *           the cost of a few microamps.
+ *           the ride is over: links dropped, advertising stopped, and the
+ *           device stays in System ON Idle - the CPU stopping in WFI between
+ *           1 Hz polls while everything else keeps running. That poll is the
+ *           wake source: the sampling thread notices the wheel turning and
+ *           calls bt_resume(), so the wheel still starts the device by itself.
+ *
+ * There is deliberately no System OFF tier. Waking from it is GPIO DETECT on
+ * P0/P1 or RESET, and this board's only accelerometer interrupts sit on port
+ * P2, which carries no gpiote-instance in the SoC devicetree (gpiote30 belongs
+ * to gpio0, gpiote20 to gpio1). Arming a pin nothing can pull would power the
+ * device down for good. See wheel_power_soc_suspend() for what a wake source
+ * would take.
  *
  * "System ON Idle" is a description, not a switch. On nRF54L15 it is what
  * arch_cpu_idle() does; the SoC selects no HAS_PM and implements no
@@ -53,10 +58,9 @@
 #define WHEEL_POWER_IDLE_TIMEOUT_S CONFIG_CSC_POWER_IDLE_TIMEOUT_S
 
 /*
- * Not conditional on System OFF. It used to be - the guard said "without System
- * OFF there is no tier 3" and substituted INT32_MAX - but that stopped being
- * true once the radio-off path existed: a board with no wake line still has a
- * tier 3, it just sleeps a different thing. Same timeout, both builds.
+ * Not conditional on anything. It used to be guarded on the System OFF option,
+ * substituting INT32_MAX under a comment saying "without System OFF there is no
+ * tier 3" - which stopped being true once the radio-off path existed.
  */
 #define WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S CONFIG_CSC_POWER_DEEP_SLEEP_TIMEOUT_S
 
@@ -71,18 +75,20 @@ int wheel_power_set_active(void);
 int wheel_power_set_standby(void);
 bool wheel_power_is_standby(void);
 
-/* True when the chip rebooted because of a System OFF wake via GPIO DETECT
- * (i.e. the wheel started moving while the device was off). */
+/* True when the last reset came from a System OFF wake via GPIO DETECT. Always
+ * false on HOLYIOT-25008, which has no System OFF tier - kept because it reads
+ * a real hardware register and is correct either way. */
 bool wheel_power_woke_from_off(void);
 
 /* True when the LIS2DH12 answers WHO_AM_I over SPI (minimal self-test). */
 bool wheel_power_selftest(void);
 
-/* Platform hooks: put the SoC into its low-power state and wake it back up.
- * Weak defaults do nothing; override them in the board support layer. On
- * HOLYIOT-25008 the INT1 line (P2.00) cannot wake the chip, so a real
- * implementation must either rework the board (INT1 on P0/P1) or use a
- * periodic timer wake that polls P2.00. */
+/* Platform hooks: put the device into its low-power state and bring it back.
+ * Weak defaults do nothing; override them in the board support layer.
+ *
+ * On HOLYIOT-25008 the default is the real implementation: the radio is what
+ * sleeps, and the 1 Hz wheel poll is the wake source. There is no System OFF
+ * because nothing on P0/P1 can report the wheel (see the tier-3 note above). */
 void wheel_power_soc_suspend(void);
 void wheel_power_soc_resume(void);
 

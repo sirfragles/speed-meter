@@ -18,9 +18,8 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/poweroff.h>
 
-#include <hal/nrf_gpio.h>
+/* nrfx_reset_reason_get(): wheel_power_woke_from_off() reads the reset reason. */
 #include <helpers/nrfx_reset_reason.h>
 
 #include <stdint.h>
@@ -71,12 +70,6 @@ static const struct spi_dt_spec lis_spi =
 #define WAKE_INT_DUR   REG_INT1_DUR
 #define WAKE_INT_ROUTE 0x40 /* I1_IA1 -> INT1 */
 #endif
-
-/* SoC-side wake pin: the selected INT line from the devicetree `irq-gpios`. */
-#define WAKE_GPIO_PORT \
-	DT_PROP(DT_GPIO_CTLR_BY_IDX(SENSOR_NODE, irq_gpios, WAKE_INT_IDX), port)
-#define WAKE_GPIO_PIN \
-	DT_GPIO_PIN_BY_IDX(SENSOR_NODE, irq_gpios, WAKE_INT_IDX)
 
 static bool standby;
 static bool inited;
@@ -316,52 +309,34 @@ bool wheel_power_selftest(void)
 
 __weak void wheel_power_soc_suspend(void)
 {
-#if IS_ENABLED(CONFIG_CSC_POWER_SYSTEM_OFF)
-	uint32_t pin = NRF_GPIO_PIN_MAP(WAKE_GPIO_PORT, WAKE_GPIO_PIN);
-
 	/*
-	 * Take the radio down first: the wake is a reboot, so there is no state
-	 * worth preserving, and a clean disconnect tells the watch immediately
-	 * instead of leaving it to a supervision timeout.
-	 */
-	bt_prepare_sleep();
-
-	/* Arm the wake pin, then power off; the INT event reboots the chip. */
-	nrf_gpio_cfg_sense_input(pin, NRF_GPIO_PIN_PULLDOWN,
-				 NRF_GPIO_PIN_SENSE_HIGH);
-	nrfx_reset_reason_clear(UINT32_MAX);
-	LOG_INF("power: System OFF, wake on %s at P%d.%02d",
-		IS_ENABLED(CONFIG_CSC_POWER_WAKE_INT2) ? "INT2" : "INT1",
-		(int)WAKE_GPIO_PORT, (int)WAKE_GPIO_PIN);
-	sys_poweroff();
-#else
-	/*
-	 * No wake line on this board, so System OFF would be a one-way door:
-	 * this part has no timer wake, and the accelerometer's INT1/INT2 sit on
-	 * port P2, which carries no GPIOTE instance on nRF54L15 (the SoC
-	 * devicetree gives gpiote30 to gpio0 and gpiote20 to gpio1; gpio2 has
-	 * no gpiote-instance property at all). Arming that pin and calling
-	 * sys_poweroff() would leave a board that never answers again.
+	 * The radio is what sleeps, because on this board it is the only thing
+	 * that can. System OFF is not an option here: waking from it is GPIO
+	 * DETECT on P0/P1 or RESET, and the accelerometer's INT1/INT2 sit on port
+	 * P2 - the SoC devicetree gives gpiote30 to gpio0 and gpiote20 to gpio1,
+	 * and gpio2 carries no gpiote-instance property at all. Arming a pin that
+	 * nothing can pull would leave a board that never answers again.
 	 *
-	 * So the device stays in System ON Idle and the radio is what sleeps - and
-	 * the radio is also the part that costs the most. Advertising every 100 ms
-	 * plus a maintained link runs to tens of microamps, while the core stopping
-	 * in WFI between two 1 Hz polls costs a few. The sampling thread keeps
-	 * running at STANDBY_POLL_US through all of this, and noticing the wheel
-	 * turn there is what brings the radio back. That poll, not a hardware
-	 * event, is the wake source.
+	 * So the device stays in System ON Idle: the CPU stops in WFI between
+	 * polls, everything else keeps running, and the sampling thread at
+	 * STANDBY_POLL_US notices the wheel turning and calls bt_resume(). That
+	 * poll, not a hardware event, is the wake source.
+	 *
+	 * And the radio is the right thing to sleep: advertising every 100 ms
+	 * plus a maintained link runs to tens of microamps, while the core idling
+	 * between two 1 Hz polls costs a few.
+	 *
+	 * Reviving System OFF would take a wake source on P0 or P1. The only one
+	 * this board offers without soldering is the button, sw0 on P1.13, which
+	 * would cost a press before every ride. The plan keeps that as a reserve
+	 * pending a current measurement; see the plan's power section.
 	 */
 	bt_prepare_sleep();
 	LOG_INF("power: radio off, System ON idle, wheel polled at 1 Hz");
-#endif
 }
 
 __weak void wheel_power_soc_resume(void)
 {
-#if IS_ENABLED(CONFIG_CSC_POWER_SYSTEM_OFF)
-	/* Wake from System OFF is a reboot - nothing to resume here. */
-	LOG_DBG("SoC resume (no-op: wake is a reboot)");
-#else
 	/*
 	 * The counterpart to the radio-off path above, and the reason it is not
 	 * a one-way door: the chip never stopped, so the radio has to be
@@ -369,5 +344,4 @@ __weak void wheel_power_soc_resume(void)
 	 */
 	LOG_INF("power: radio on - wheel turning again");
 	bt_resume();
-#endif
 }

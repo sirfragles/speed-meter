@@ -112,7 +112,8 @@ t_us,ax_mg,ay_mg,az_mg
   `lis2dh status` (stan FIFO, ODR, liczniki), `lis2dh counters`,
   `lis2dh start` / `lis2dh stop [cancel]` (sterowanie sprzętowym FIFO).
   Ręczne `wheel reg` / `wheel raw` **zostały usunięte** w refaktorze
-  (surowe SPI zostało tylko w `wheel_power` do uzbrojenia INT1 przed System OFF).
+  (surowe SPI zostało tylko w `wheel_power` do uzbrojenia przerwania ruchu
+  przy przejściu w standby).
   Uwaga: shell sterownika tylko **czyta** rejestry — zapis FS/BOOT nie jest
   dostępny z powłoki (FS ustawia się przez `SENSOR_ATTR_FULL_SCALE` w API).
 - **Detektor**: `wheel_detector` (zliczanie cykli grawitacji przez zero-crossing

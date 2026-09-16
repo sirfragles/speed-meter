@@ -110,19 +110,12 @@ jobs:
           - name: bench-fifo
             conf: "debug.conf;diag.conf;stream.conf"
             sysbuild: false
-          # Production on an untouched module: magnetless accelerometer source,
-          # MCUboot and on-demand DFU over BLE. Tier 3 stops the links and the
-          # advertising and the 1 Hz wheel poll brings them back, so it needs
-          # nothing soldered. This is the image to flash when no wire has been
-          # added - it must keep building, because it is what most boards will
-          # run.
-          - name: stock
-            conf: "debug.conf;diag.conf;stock.conf;dfu.conf"
-            sysbuild: true
-          # Production with the INT1 wire to P1.05: tier 3 is System OFF and the
-          # wake is a reboot. Building it proves only that it compiles - that
-          # the wire exists is a property of the board, not of the image, which
-          # is why CSC_POWER_WAKE_LINE_WIRED gates the option in Kconfig.
+          # Production: magnetless accelerometer source, three-tier standstill
+          # policy, MCUboot and on-demand DFU over BLE. Tier 3 stops the links
+          # and the advertising and settles into System ON Idle, with the 1 Hz
+          # wheel poll as its own wake source - nothing soldered, nothing
+          # pressed. There is no System OFF variant: the board offers no wake
+          # source on P0/P1 and cannot be modified to get one.
           - name: production
             conf: "debug.conf;diag.conf;power.conf;dfu.conf"
             sysbuild: true

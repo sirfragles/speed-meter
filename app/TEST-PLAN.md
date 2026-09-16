@@ -273,29 +273,31 @@ Po zakończeniu: zaktualizować sekcję „Zakres ±g” w `tools/README.md` + c
 3. **Koło** (osobna sesja): `capture --seconds 30 --detect -o jazda1.csv` + `analyze`.
 4. **CSCS**: publikacja przeliczeń detektora (licznik obrotów + czas 1/1024 s) zamiast symulacji.
 
-## 8. Pomiar poboru — dwa warianty, trzy stany
+## 8. Pomiar poboru — jeden wariant, trzy stany
 
 Powód: „System ON Idle" i „rok na CR2032" to twierdzenia **o prądzie**, a nic
-w tym projekcie nie zostało zmierzone. Wariant `stock` nie ma czym wybudzić
-z System OFF, więc zostaje w System ON Idle — i właśnie dlatego trzeba wiedzieć,
+w tym projekcie nie zostało zmierzone. Płytka nie ma czym wybudzić z System
+OFF, więc tier 3 zostaje w System ON Idle — i właśnie dlatego trzeba wiedzieć,
 ile to kosztuje, a nie założyć, że „kilka µA".
 
-**Zmierz dla obu obrazów (`stock` i `production`) po trzy stany:**
+**Zmierz obraz produkcyjny w trzech stanach:**
 
 | Stan | Jak wejść | Czego dotyczy |
 |---|---|---|
 | tier 1 | koło się kręci (lub postój < 10 s) | próbkowanie 100 Hz + reklamowanie |
 | tier 2 | postój 10–300 s | sensor 1 Hz, **łącze BLE utrzymane** |
-| tier 3 | postój > 300 s | `stock`: radio off + System ON Idle; `production`: System OFF |
+| tier 3 | postój > 300 s | radio off + System ON Idle, polling 1 Hz |
 
 **Czego oczekiwać — i co by to obaliło:**
 
-- tier 3 `stock` musi być **znacznie niżej niż tier 2 `stock`**. Jeśli nie jest,
+- tier 3 musi być **znacznie niżej niż tier 2**. Jeśli nie jest,
   `bt_prepare_sleep()` nie robi tego, co myślimy, i cała konstrukcja „zasypia
   radio" jest fałszywa.
-- tier 3 `stock` będzie **wyżej** niż tier 3 `production` (System OFF). Różnica
-  to koszt System ON Idle — to jest ta liczba, której nie znamy.
-- Rząd wielkości do porównania: sam LIS2DH12 w trybie 1 Hz to ok. 2 µA.
+- Rząd wielkości do porównania: sam LIS2DH12 w trybie 1 Hz to ok. 2 µA, więc
+  tier 2 i tier 3 nie mogą wyjść obok siebie.
+- **Ta liczba rozstrzyga otwartą decyzję:** czy warto kupić z powrotem różnicę
+  między System ON Idle a System OFF, płacząc przyciskiem `sw0` przed każdą
+  jazdą. Bez pomiaru to zgadywanie.
 
 **Jak mierzyć:**
 

@@ -65,7 +65,7 @@ Konfiguracja (nakładana przez -DEXTRA_CONF_FILE):
 
   wheel_detector.c/.h     — samokalibrujący się detektor pełnych obrotów
   wheel_diag.c            — diagnostyka: shell `wheel` + nagrywanie + kalibracja
-  wheel_power.c/.h        — oszczędzanie energii, System OFF + wake na INT1
+  wheel_power.c/.h        — oszczędzanie energii, trzy stopnie + radio off
   boot.c/.h               — self-test przy starcie + potwierdzenie obrazu MCUboot
   dfu_mode.c/.h           — wejście w tryb DFU (advertising SMP)
   dfu_button.c/.h         — przycisk: 5 s hold → DFU + sygnalizacja LED (czerwony)
@@ -78,8 +78,8 @@ Konfiguracja (nakładana przez -DEXTRA_CONF_FILE):
 
 > **Zasada refaktora:** cała obsługa czujnika idzie przez **sterownik Zephyra**
 > (LIS2DH), a diody przez **sterownik LED** (`led_*_dt`). Jedyny świadomy wyjątek
-> to `wheel_power.c`, które przed `sys_poweroff()` zapisuje rejestry LIS2DH surowo
-> po SPI — sterownik nie eksponuje uzbrojenia INT1 dla System OFF.
+> to `wheel_power.c`, które przy przejściu w standby zapisuje rejestry LIS2DH
+> surowo po SPI — sterownik nie eksponuje uzbrojenia przerwania ruchu.
 
 ## Build
 
@@ -214,16 +214,17 @@ bezmagnesowy czujnik obrotu (faza grawitacji + kontrola dośrodkowa).
       `CONFIG_CSC_BAS_LEVEL`, domyślnie 100%; na HOLYIOT brak znanego układu
       pomiaru),
 - [ ] `CONFIG_CSC_SENSOR_LOCATION` dostroić do miejsca montażu czujnika,
-- [ ] Weryfikacja na sprzęcie: wake z System OFF, próg `CSC_POWER_WAKE_THS`,
-      `CSC_POWER_IDLE_TIMEOUT_S` i czułość detektora na prawdziwym kole.
+- [ ] Weryfikacja na sprzęcie: powrót reklamowania po tier 3, próg
+      `CSC_POWER_WAKE_THS`, `CSC_POWER_IDLE_TIMEOUT_S` i czułość detektora na
+      prawdziwym kole.
 
 ## Pokrycie wymagań
 
 | Wymaganie | Realizacja |
 |---|---|
 | Wykrywanie pełnych obrotów koła | `wheel_detector.c` — faza grawitacji + kontrola dośrodkowa, samokalibracja |
-| Automatyczne wybudzenie po ruszeniu | `wheel_power.c` — INT1 na P1.05, GPIO SENSE + `sys_poweroff()`; po wake restart i reconnect |
-| Automatyczne uśpienie po zatrzymaniu | `wheel_power.c` — trzy stopnie: 10 s → czujnik w 1 Hz (połączenie utrzymane), 5 min → rozłączenie + System OFF |
+| Automatyczne wybudzenie po ruszeniu | `wheel_power.c` — tier 3 nie zatrzymuje rdzenia: wątek próbkujący chodzi dalej co 1 s, wykrywa obrót i woła `bt_resume()` |
+| Automatyczne uśpienie po zatrzymaniu | `wheel_power.c` — trzy stopnie: 10 s → czujnik w 1 Hz (połączenie utrzymane), 5 min → rozłączenie + radio off, SoC w System ON Idle |
 | Standardowy BLE CSC | `csc.c` — 0x1816, pomiary + feature + sensor location |
 | Watch + wyświetlacz jednocześnie | `CONFIG_BT_MAX_CONN=2`, advertising trwa dopóki jest wolny slot (`bt.c`) |
 | Battery Service | `CONFIG_BT_BAS=y`; poziom z **pomiaru SAADC** (`battery.c`, wewnętrzne wejście VDD), a `CONFIG_CSC_BAS_LEVEL` tylko jako fallback |
@@ -232,7 +233,7 @@ bezmagnesowy czujnik obrotu (faza grawitacji + kontrola dośrodkowa).
 | DFU po 5 s przytrzymania | `dfu_button.c` (`CSC_DFU_BUTTON_LONG_MS`, domyślnie 5000) |
 | Sygnalizacja LED | `bt.c` (niebieski), `boot.c` (zielony/czerwony), `dfu_button.c` (czerwony) |
 | Konfiguracja w pamięci | `wheel_config.c` — settings/NVS, blob wersjonowany |
-| Bardzo niski pobór energii | LIS2DH 1 Hz + przerwanie ruchu, System OFF (~µA), advertising 100/150 ms. RAM: 34 kB (base/GPIO), 104 kB (bench), 123 kB (DFU — zawiera recorder 48 kB z `diag.conf`) |
+| Bardzo niski pobór energii | LIS2DH 1 Hz, tier 3 = radio off + System ON Idle, advertising 100/150 ms. RAM: 34 kB (base/GPIO), 104 kB (bench), 123 kB (DFU — zawiera recorder 48 kB z `diag.conf`) |
 
 ## Sygnalizacja LED
 
@@ -262,11 +263,17 @@ wybudzenie ruchem → krótka aktywność → głęboki sen po zakończeniu jazd
 |---|---|---|---|---|
 | 1 — jazda | obroty koła | 100 Hz | CSC ~1 Hz, połączenie aktywne | budzony do pomiaru |
 | 2 — postój | `CSC_POWER_IDLE_TIMEOUT_S` (10 s) | 1 Hz + przerwanie ruchu | połączenie **utrzymane** | idle między connection events |
-| 3 — koniec jazdy | `CSC_POWER_DEEP_SLEEP_TIMEOUT_S` (5 min) | 1 Hz + przerwanie ruchu | rozłączenie | **System OFF** |
+| 3 — koniec jazdy | `CSC_POWER_DEEP_SLEEP_TIMEOUT_S` (5 min) | 1 Hz | rozłączenie | **System ON Idle** |
 
-Stopień 3 jest warunkiem koniecznym roku pracy z CR2032: bez niego połączony
-zegarek trzymałby urządzenie przebudzone przez całą dobę. Pierwszy obrót koła
-wybudza układ (INT1 → P1.05), a zegarek łączy się sam z zapisanego bonda.
+Stopień 3 jest tym, co pozwala ogniwu przetrwać sezon: bez niego połączony
+zegarek trzymałby urządzenie przebudzone przez całą dobę — reklamowanie co
+100 ms plus podtrzymywane łącza to dziesiątki µA.
+
+**System OFF nie wchodzi w grę na tej płytce.** Wybudzenie z niego to GPIO
+DETECT na P0/P1 albo RESET — timerem się nie da — a INT1 i INT2 akcelerometru
+siedzą na P2.00 i P2.03, na porcie bez instancji GPIOTE. Płytki nie da się
+sensownie przerobić, więc urządzenie zostaje w System ON Idle, a obrót koła
+wykrywa polling 1 Hz. Autostart działa, nic nie trzeba naciskać.
 
 > Stopień 2 **nie** zrywa połączenia — zatrzymanie na światłach nie może
 > kosztować rowerzysty kontaktu z zegarkiem. To zresztą najtańszy stan
@@ -322,27 +329,21 @@ Diagnostyka (bench): `wheel battery` → `battery: 3012 mV, 90% (last published 
 
 ## Warianty buildów
 
-Dwa obrazy **produkcyjne**, różniące się tym, jak urządzenie zasypia. Reszta
-(polling pojedynczej próbki, detektor, CSCS) jest w obu ta sama.
+Jeden obraz **produkcyjny**. Polling pojedynczej próbki, detektor i CSCS są
+w nim takie same jak w pozostałych wariantach — różni się tylko polityką
+postoju.
 
-| Wariant | Komenda (`-DEXTRA_CONF_FILE=`) | Płytka | Co śpi po 300 s |
-|---|---|---|---|
-| **stock** | `debug.conf;diag.conf;stock.conf;dfu.conf` + `--sysbuild` | **fabryczna, bez przeróbek** | radio |
-| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` + `--sysbuild` | z drucikiem INT1 → P1.05 | SoC (System OFF) |
-
-Warianty pomocnicze (nie do wypuszczania):
-
-| Wariant | Komenda | Uwagi |
+| Wariant | Komenda (`-DEXTRA_CONF_FILE=`) | Uwagi |
 |---|---|---|
+| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` + `--sysbuild` | źródło akcelerometrowe, trzy stopnie, MCUboot + DFU |
 | baza (symulacja) | — | tylko `prj.conf`; `CONFIG_CSC_SIMULATE=y` |
 | gpio | `debug.conf;gpio.conf` | czujnik Halla / kontaktron |
 | bench | `debug.conf;diag.conf` | MCUmgr/SMP + shell `wheel` |
 | bench + FIFO | `debug.conf;diag.conf;stream.conf` | dodatkowo shell sterownika `lis2dh` |
 
-### Dlaczego dwa warianty i dlaczego akurat tak
+### Dlaczego nie ma wariantu z System OFF
 
-Na fabrycznym module **nie ma czym wybudzić głębokiego snu**, i to jest fakt
-z devicetree SoC, nie ostrożność:
+Bo nie ma czym go obudzić, i to jest fakt z devicetree SoC, nie ostrożność:
 
 | Linia | Pin | GPIOTE / SENSE |
 |---|---|---|
@@ -353,20 +354,19 @@ z devicetree SoC, nie ostrożność:
 Na nRF54L15 port 2 nie ma instancji GPIOTE — `gpiote30` należy do `gpio0`,
 `gpiote20` do `gpio1`, a `gpio2` nie ma tej właściwości wcale. System OFF nie ma
 na tym układzie wybudzania timerem, więc jedyne źródła to GPIO SENSE, NFC,
-analog i RESET. Skoro nie ma pinu, **wariant stock nie może wchodzić
-w System OFF** — wszedłby i nigdy nie wrócił.
+analog i RESET. Płytki nie da się sensownie przerobić, więc **System OFF jest
+nieosiągalny** — wszedłby i nigdy nie wrócił. Zmiana `CSC_POWER_WAKE_INT2` nic
+nie daje: INT2 też siedzi na P2.
 
-Wariantu stock nie ratuje zmiana `CSC_POWER_WAKE_INT2`: INT2 też siedzi na P2.
+Dlatego tier 3 wygląda tak:
 
-Dlatego tier 3 ma dwa zakończenia:
-
-| | stock | production |
-|---|---|---|
-| po 300 s | `bt_prepare_sleep()` — radio off | `sys_poweroff()` — System OFF |
-| tryb SoC | **System ON Idle** (CPU w WFI, RAM/LFCLK/GRTC działają) | wyłączony |
-| sensor | 1 Hz (już od tier 2) | 1 Hz |
-| co budzi | **polling 1 Hz** (`STANDBY_POLL_US`) | INT1 na P1.05, restart układu |
-| autostart bez przycisku | tak, do ~1 s | tak |
+| | wartość |
+|---|---|
+| po 300 s | `bt_prepare_sleep()` — radio off |
+| tryb SoC | **System ON Idle** (CPU w WFI, RAM/LFCLK/GRTC działają) |
+| sensor | 1 Hz (już od tier 2) |
+| co budzi | **polling 1 Hz** (`STANDBY_POLL_US`) |
+| autostart bez przycisku | tak, do ~1 s |
 
 > **System ON Idle to opis, nie przełącznik.** Na nRF54L15 to po prostu
 > `arch_cpu_idle()` → `__WFI()`. Jedyny pokrewny symbol to
@@ -380,29 +380,19 @@ Dlatego tier 3 ma dwa zakończenia:
 > to przeoczyć, bo jedynym sygnałem jest ostrzeżenie Kconfig; nic się nie psuje
 > i nic się nie dzieje.
 
-Rdzeń zostaje w System ON idle i próbkuje co 1 s. To, co naprawdę zjada
+Rdzeń zostaje w System ON Idle i próbkuje co 1 s. To, co naprawdę zjada
 ogniwo, to radio — reklamowanie co 100 ms plus podtrzymywane łącza to dziesiątki
-µA, podczas gdy rdzeń w idle między dwoma pollami to kilka. Wariant stock jest
-więc droższy o kilka µA, ale **nie wymaga lutowania**.
+µA, podczas gdy rdzeń w idle między dwoma pollami to kilka.
 
-> **Nie zweryfikowane na sprzęcie:** o ile dokładnie droższy. Pomiar poboru dla
-> obu wariantów jest do zrobienia i powinien trafić do planu testów, zanim ktoś
-> obieca „rok na CR2032" dla stocka.
-
-> `power.conf` i `stock.conf` różnią się jednym: pierwszy ustawia
-> `CSC_POWER_WAKE_LINE_WIRED=y`, a na tym symbolu wisi `CSC_POWER_SYSTEM_OFF`.
-> **System OFF bez zadeklarowanego drucika to błąd Kconfig**, nie cicha pomyłka:
-> wymuszenie `SYSTEM_OFF=y` przy `stock.conf` daje `n` w `.config` i ostrzeżenie
-> Kconfig nazywające symbol.
->
-> Bramka chroni przed złą **konfiguracją**, nie przed wgraniem złego **pliku**:
-> obraz `production` na fabrycznej płytce nadal wejdzie w System OFF i nie
-> wstanie. Dlatego oba pliki mają to w nagłówku.
+> **Niezweryfikowane:** o ile dokładnie. Sekcja 8 `TEST-PLAN.md` opisuje pomiar
+> dla trzech stanów. Dopiero on rozstrzygnie, czy warto kupować te kilka µA
+> z powrotem — jedynym źródłem wybudzania dostępnym bez lutowania jest przycisk
+> `sw0` (P1.13), a to kosztowałoby naciskanie go przed każdą jazdą.
 
 > **Nie łącz `stream.conf` z `power.conf`** w jednym buildzie: `stream.conf`
 > rejestruje handler przerwania sterownika na linii INT1, której `wheel_power`
-> używa do uzbrojenia wybudzania z System OFF — oba na raz walczyłyby o ten pin.
-> Gdy FIFO wejdzie do produkcji, wymaga to jawnego uzgodnienia kolejności
+> używa do uzbrojenia przerwania ruchu w standby — oba na raz walczyłyby o ten
+> pin. Gdy FIFO wejdzie do produkcji, wymaga to jawnego uzgodnienia kolejności
 > (patrz plan).
 
 

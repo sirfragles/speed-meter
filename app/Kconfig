@@ -189,14 +189,23 @@ config CSC_POWER_SAVE
 	depends on SPI
 	help
 	  Puts the LIS2DH12 into a 1 Hz low-power mode with a movement interrupt
-	  armed on the selected INT line whenever the wheel stops, so the SoC may
-	  sleep and wake on rotation. The actual SoC sleep is provided by
-	  CONFIG_CSC_POWER_SYSTEM_OFF and wheel_power_soc_suspend/resume.
+	  armed on the selected INT line whenever the wheel stops, and stops the
+	  BLE links and the advertising once the ride is over.
+
+	  There is no System OFF tier: waking from it needs GPIO DETECT on P0/P1,
+	  and this board's accelerometer interrupts sit on port P2, which has no
+	  gpiote instance. wheel_power.c explains it at the point of use.
 
 choice CSC_POWER_WAKE_INT
-	prompt "Interrupt line that wakes the SoC"
+	prompt "Interrupt line the sensor arms on standstill"
 	default CSC_POWER_WAKE_INT1
 	depends on CSC_POWER_SAVE
+	help
+	  Which INT pin the LIS2DH12 routes its movement interrupt to while
+	  standing still. On HOLYIOT-25008 nothing on the SoC reads either line -
+	  both are on port P2, which has no GPIOTE - so this only sets what the
+	  sensor does, and the 1 Hz poll is what actually notices movement.
+	  Kept because it is what a board with a readable line would need.
 
 config CSC_POWER_WAKE_INT1
 	bool "INT1"
@@ -225,14 +234,9 @@ config CSC_POWER_DEEP_SLEEP_TIMEOUT_S
 	depends on CSC_POWER_SAVE
 	help
 	  Tier 3: after this long without a revolution the ride is over. The BLE
-	  links are dropped and the advertising stops; the first wheel movement
-	  brings them back and the watch reconnects by itself.
-
-	  What sleeps then depends on the board. With CSC_POWER_SYSTEM_OFF the SoC
-	  powers down and the wake is a reboot - the cheapest, and it needs the
-	  INT1 wire. Without it the radio sleeps and a 1 Hz poll watches for the
-	  wheel moving again; that works on any board and costs a few microamps
-	  more. Either way this symbol sets when the ride is declared over.
+	  links are dropped, the advertising stops, and the device settles into
+	  System ON Idle. The first wheel movement brings everything back - the
+	  sampling thread polls once a second and is its own wake source.
 
 	  It must stay well above the traffic-light scale - the default of 5
 	  minutes is the behaviour of the commercial speed sensors.
@@ -245,42 +249,6 @@ config CSC_POWER_WAKE_THS
 	help
 	  Each digit is 16 mg at the standby full scale (+/-2 g). 16 digits means
 	  a ~256 mg movement wakes the device.
-
-config CSC_POWER_WAKE_LINE_WIRED
-	bool "INT1 is wired to a GPIOTE-capable pin (board modification)"
-	default n
-	depends on CSC_POWER_SAVE
-	help
-	  The HOLYIOT-25008 ships with the LIS2DH12 INT1 on P2.00. Port 2 on
-	  nRF54L15 has no GPIOTE and no SENSE/DETECT - the SoC devicetree gives
-	  gpiote30 to gpio0 and gpiote20 to gpio1, and gpio2 carries no
-	  gpiote-instance property at all - so a pin there can neither raise an
-	  interrupt nor wake the SoC. The board devicetree therefore routes
-	  irq-gpios[0] to P1.05 (UART RX), which only describes reality once a
-	  wire from INT1 to that pad exists.
-
-	  Set this only if that wire is on your board. It gates
-	  CSC_POWER_SYSTEM_OFF below, because arming a wake pin that is not
-	  connected powers the device down and nothing brings it back.
-	  stock.conf is the variant for a board without the modification.
-
-config CSC_POWER_SYSTEM_OFF
-	bool "Enter System OFF in standby (event-driven wake on P0/P1)"
-	default n
-	depends on CSC_POWER_SAVE && POWEROFF && CSC_POWER_WAKE_LINE_WIRED
-	help
-	  wheel_power_soc_suspend() arms the selected INT pin for GPIO SENSE and
-	  calls sys_poweroff(); the INT event then reboots the chip. Keep this off
-	  during bring-up: after System OFF the debugger only reconnects after a
-	  wake event.
-
-	  Requires CSC_POWER_WAKE_LINE_WIRED: System OFF has no timer wake on this
-	  part, so a board without the wire would sleep permanently.
-
-	  A build without this symbol still has a tier 3 - the links and the
-	  advertising stop and the 1 Hz wheel poll is what brings them back - and
-	  that is what stock.conf uses. It costs a few microamps more than System
-	  OFF and needs nothing soldered.
 
 config CSC_DFU
 	bool "On-demand firmware update (DFU) over BLE"
