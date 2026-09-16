@@ -1,12 +1,16 @@
 # Copyright (c) 2026 Mateusz Żerebecki
 # SPDX-License-Identifier: Apache-2.0
 #
-# Build every supported configuration of the Speed Meter firmware, and publish
-# the production images as a GitHub release when a v* tag is pushed.
+# Build every supported configuration of the Speed Meter firmware, replay the
+# wheel detector against recorded rides, and publish the production images as a
+# GitHub release when a v* tag is pushed.
 #
-# The build runs inside the same container image the project is developed with
+# The builds run inside the same container image the project is developed with
 # (ghcr.io/zephyrproject-rtos/zephyr-build), so CI and a local build use an
 # identical toolchain - no SDK install step, no version drift.
+#
+# Every action is pinned to a commit SHA, the way Zephyr pins its own workflows:
+# a tag is mutable, a SHA is not.
 
 name: Build
 
@@ -25,6 +29,53 @@ env:
   APP_DIR: speed-meter/app
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Host-side tests. The wheel detector is pure arithmetic with no Zephyr calls,
+  # so the cheapest honest test is to replay motion recorded from a real board
+  # through the production source file. Needs no cross toolchain, no hardware.
+  # ---------------------------------------------------------------------------
+  tests:
+    name: detector replay
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/zephyrproject-rtos/zephyr-build:main
+      options: --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: speed-meter
+
+      - name: Set up west workspace
+        run: |
+          set -eux
+          # Same workaround as the build job: a container job gets GitHub's
+          # HOME, which hides the CMake package registry the image uses to
+          # advertise the Zephyr SDK.
+          sdk_dir=$(ls -d /opt/toolchains/zephyr-sdk-* | sort -V | tail -n1)
+          echo "ZEPHYR_SDK_INSTALL_DIR=$sdk_dir" >> "$GITHUB_ENV"
+
+          west init -l speed-meter
+          west update --narrow
+
+      - name: Run detector tests
+        shell: bash
+        run: |
+          set -eux
+          west twister -T speed-meter/tests/wheel_detector \
+            -p native_sim/native/64 -O twister-out --inline-logs -v
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: detector-test-report
+          path: |
+            twister-out/twister.xml
+            twister-out/**/handler.log
+          if-no-files-found: warn
+          retention-days: 14
+
   # ---------------------------------------------------------------------------
   # One job per configuration. fail-fast is off so a broken bench build still
   # shows whether production is fine.
@@ -64,7 +115,7 @@ jobs:
             sysbuild: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: speed-meter
 
@@ -72,7 +123,7 @@ jobs:
       # so keep it around between runs. Keyed on the manifest: bumping the
       # pinned Zephyr revision invalidates the cache.
       - name: Cache west workspace
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .west
@@ -106,7 +157,8 @@ jobs:
         # syntax below is a syntax error - ask for bash explicitly.
         shell: bash
         run: |
-          set -eux
+          # pipefail matters here: west's exit status has to survive the tee.
+          set -euxo pipefail
           args=(west build -b "$BOARD" "$APP_DIR" -d build --pristine=always)
           if [ "${{ matrix.sysbuild }}" = "true" ]; then
             args+=(--sysbuild)
@@ -114,11 +166,40 @@ jobs:
           if [ -n "${{ matrix.conf }}" ]; then
             args+=(-- "-DEXTRA_CONF_FILE=${{ matrix.conf }}")
           fi
-          "${args[@]}"
+          "${args[@]}" 2>&1 | tee build.log
+
+      # Size report, posted to the run's summary page. size_report is what the
+      # `footprint` CMake target runs; it is called directly because that works
+      # for a plain build directory and for the application directory inside a
+      # sysbuild one. A regression in size should be noticed, not discovered.
+      - name: Footprint report
+        shell: bash
+        run: |
+          set -eux
+          build_dir=build
+          if [ "${{ matrix.sysbuild }}" = "true" ]; then
+            build_dir=build/app
+          fi
+
+          python3 zephyr/scripts/footprint/size_report \
+            -k "$build_dir/zephyr/zephyr.elf" -z "$PWD/zephyr" -o "$build_dir" \
+            --json "$build_dir/rom.json" rom
+          python3 zephyr/scripts/footprint/size_report \
+            -k "$build_dir/zephyr/zephyr.elf" -z "$PWD/zephyr" -o "$build_dir" \
+            --json "$build_dir/ram.json" ram
+
+          {
+            echo '```'
+            grep -A6 'Memory region' build.log | head -8 || true
+            echo '```'
+            echo
+            python3 speed-meter/scripts/footprint_summary.py "$build_dir" \
+              --title '${{ matrix.name }}'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload firmware
         if: matrix.name == 'production'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: firmware
           path: |
@@ -128,21 +209,26 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Release. Only on a tag, and only once every configuration built.
+  # Release. Only on a tag, and only once the tests passed and every
+  # configuration built.
   # ---------------------------------------------------------------------------
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, tests]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - name: Download firmware
-        uses: actions/download-artifact@v4
-        with:
-          name: firmware
-          path: firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          # gh is preinstalled on the runner, so fetching the artifact needs no
+          # action at all - one less third-party dependency in the release path.
+          gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            -n firmware -D firmware
 
       # Two images matter to a user, so give them names that say what they are:
       #   <tag>-full.hex   flash over SWD (bootloader + signed application)
