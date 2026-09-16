@@ -200,4 +200,68 @@ ZTEST(wheel_detector, test_replay_recorded_captures)
 	}
 }
 
+/*
+ * The calibration window stores sample times relative to `win_t0`. When
+ * plane_solve() rejects a full window, the older half is dropped - but the
+ * surviving times stay relative to the *old* base while win_t0 moves forward,
+ * and window_add() then appends new samples relative to the *new* one. The
+ * window ends up holding two different time origins at once.
+ *
+ * This drives that path deterministically. Isotropic 3D noise has three equal
+ * covariance eigenvalues, so quality = 1 - l_min/l_max is ~0 and plane_solve()
+ * rejects every full window - which is exactly what makes the window slide.
+ * A signal confined to a plane would do the opposite: PCA would accept it and
+ * the slide branch would never be reached.
+ */
+#define WIN_TEST_SAMPLES  1200U
+#define WIN_TEST_PERIOD_S (1.0 / 100.0)
+
+static struct wheel_detector det_win;
+
+static float iso_noise(uint32_t index, uint32_t axis)
+{
+	uint32_t h = index * 2654435761U + axis * 2246822519U;
+
+	h ^= h >> 15;
+	h *= 2246822519U;
+	h ^= h >> 13;
+
+	return (float)(h & 0xFFFFU) / 32768.0f - 1.0f;
+}
+
+ZTEST(wheel_detector, test_window_times_stay_ordered_across_slides)
+{
+	struct wheel_detector_config cfg = {
+		.circumference_m = TEST_CIRCUMFERENCE_M,
+		.full_scale_ms2 = 9.80665f * 16.0f,
+		.nominal_radius_m = TEST_NOMINAL_RADIUS_M,
+		.odr_hz = 100,
+		.rpm_max = TEST_RPM_MAX,
+		.still_gate_ms2 = TEST_STILL_GATE_MS2,
+	};
+
+	zassert_true(wheel_detector_init(&det_win, &cfg), "init rejected the config");
+
+	for (uint32_t i = 0; i < WIN_TEST_SAMPLES; i++) {
+		(void)wheel_detector_update(&det_win, (double)i * WIN_TEST_PERIOD_S,
+					    iso_noise(i, 0U), iso_noise(i, 1U),
+					    9.80665f + iso_noise(i, 2U));
+	}
+
+	zassert_true(det_win.win_len > 0U, "the calibration window never filled");
+
+	for (uint32_t i = 1U; i < det_win.win_len; i++) {
+		zassert_true(det_win.win_t[i] > det_win.win_t[i - 1U],
+			     "window time went backwards at index %u (%.4f after "
+			     "%.4f): the window holds two different time origins",
+			     i, (double)det_win.win_t[i],
+			     (double)det_win.win_t[i - 1U]);
+	}
+
+	/* Nothing in the window may be stamped after the newest real sample. */
+	zassert_true(det_win.win_t0 + (double)det_win.win_t[det_win.win_len - 1U] <=
+			     (double)(WIN_TEST_SAMPLES - 1U) * WIN_TEST_PERIOD_S + 1e-6,
+		     "the window is stamped ahead of real time");
+}
+
 ZTEST_SUITE(wheel_detector, NULL, NULL, NULL, NULL, NULL);

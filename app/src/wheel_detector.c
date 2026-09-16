@@ -662,17 +662,31 @@ struct wheel_detector_result wheel_detector_update(struct wheel_detector *det,
 							      s, &out);
 					}
 				} else {
-					/* Keep the newer half and learn on. */
+					/* Keep the newer half and learn on.
+					 *
+					 * The surviving samples must be
+					 * rebased onto the new origin:
+					 * window_add() stamps everything
+					 * relative to win_t0, so leaving
+					 * them on the old base would put two
+					 * time origins in one window and
+					 * stamp the replayed samples into
+					 * the future.
+					 */
 					uint32_t half = det->win_len / 2U;
+					double delta =
+						(double)det->win_t[half];
 
 					for (uint32_t i = 0; i < half; i++) {
 						for (int k = 0; k < 3; k++) {
 							det->win[k][i] =
 								det->win[k][i + half];
 						}
-						det->win_t[i] = det->win_t[i + half];
+						det->win_t[i] =
+							det->win_t[i + half] -
+							(float)delta;
 					}
-					det->win_t0 += (double)det->win_t[0];
+					det->win_t0 += delta;
 					det->win_len = half;
 				}
 			}
