@@ -1,0 +1,14 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  app.wheel_detector.replay:
+    # The captures are replayed with the production geometry, so the numbers
+    # here are the numbers the firmware produces for the same data. Recorded on
+    # a real board; see README.md.
+    platform_allow:
+      - native_sim/native/64
+    tags:
+      - sensor
+      - unit
+    timeout: 120
