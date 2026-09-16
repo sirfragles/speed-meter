@@ -148,10 +148,28 @@ docker run --rm -v "$PWD":/workdir ghcr.io/zephyrproject-rtos/zephyr-build:main 
 | gpio | `debug.conf;gpio.conf` | no | Hall sensor / reed contact on a GPIO |
 | bench | `debug.conf;diag.conf` | no | MCUmgr/SMP + `wheel` diagnostics shell |
 | bench-fifo | `debug.conf;diag.conf;stream.conf` | no | adds the LIS2DH FIFO shell |
-| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` | **yes** | magnetless source, sleep/wake, DFU |
+| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` | **yes** | magnetless source, sleep/wake, DFU — **needs the INT1 wire** |
+| **stock** | `debug.conf;diag.conf;stock.conf;dfu.conf` | **yes** | the same firmware for a board with **no modifications** |
 
 > `stream.conf` registers a driver interrupt handler on INT1, which
 > `power.conf` uses for System OFF wake arming — do not combine them.
+
+### Which one to flash
+
+The two production variants differ in exactly one thing, and it is a hardware
+fact rather than a preference: whether the LIS2DH12 INT1 is wired to P1.05.
+
+| | `production` | `stock` |
+|---|---|---|
+| INT1 wire | required | none |
+| Tier 2 (sensor 1 Hz, link kept) | yes | yes |
+| Tier 3 (System OFF, wake on rotation) | yes | **cannot work** |
+| Battery | a year on a CR2032 | the SoC never powers down |
+
+`stock.conf` cannot reach System OFF even by accident: the option depends on
+`CSC_POWER_WAKE_LINE_WIRED`, which only `power.conf` sets, so setting it on an
+unmodified board is a Kconfig error rather than a device that powers down and
+never comes back.
 
 ---
 
@@ -269,7 +287,8 @@ same firmware. Bump the pin deliberately to pick up driver changes.
   wire everything works except the wake from System OFF: tier 3 of the power
   state machine will not come back on its own. `uart20` is disabled everywhere
   and logging goes over RTT (J-Link), so a bootloader that enables UART cannot
-  fight the INT1 push-pull output.
+  fight the INT1 push-pull output. **Flash the `stock` variant if you have not
+  made the modification**, and `production` if you have.
 
 ---
 

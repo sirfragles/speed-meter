@@ -111,9 +111,15 @@ jobs:
             conf: "debug.conf;diag.conf;stream.conf"
             sysbuild: false
           # Production: magnetless accelerometer source, three-tier power
-          # management, MCUboot and on-demand DFU over BLE.
+          # management, MCUboot and on-demand DFU over BLE. Needs the INT1
+          # wire on P1.05 - see power.conf.
           - name: production
             conf: "debug.conf;diag.conf;power.conf;dfu.conf"
+            sysbuild: true
+          # Same firmware for a board nobody has touched: everything except
+          # the System OFF wake, which has no wake source without the wire.
+          - name: stock
+            conf: "debug.conf;diag.conf;stock.conf;dfu.conf"
             sysbuild: true
     steps:
       - name: Checkout

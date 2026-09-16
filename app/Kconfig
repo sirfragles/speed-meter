@@ -242,15 +242,35 @@ config CSC_POWER_WAKE_THS
 	  Each digit is 16 mg at the standby full scale (+/-2 g). 16 digits means
 	  a ~256 mg movement wakes the device.
 
+config CSC_POWER_WAKE_LINE_WIRED
+	bool "INT1 is wired to a GPIOTE-capable pin (board modification)"
+	default n
+	depends on CSC_POWER_SAVE
+	help
+	  The HOLYIOT-25008 ships with the LIS2DH12 INT1 on P2.00. Port 2 on
+	  nRF54L15 has no GPIOTE and no SENSE/DETECT, so a pin there can neither
+	  raise an interrupt nor wake the SoC. The devicetree therefore routes
+	  irq-gpios[0] to P1.05 (UART RX), which only describes reality once a
+	  wire from INT1 to that pad exists.
+
+	  Set this only if that wire is on your board. It gates
+	  CSC_POWER_SYSTEM_OFF below, because arming a wake pin that is not
+	  connected powers the device down and nothing brings it back.
+	  stock.conf is the variant for a board without the modification.
+
 config CSC_POWER_SYSTEM_OFF
 	bool "Enter System OFF in standby (event-driven wake on P0/P1)"
 	default n
-	depends on CSC_POWER_SAVE && POWEROFF
+	depends on CSC_POWER_SAVE && POWEROFF && CSC_POWER_WAKE_LINE_WIRED
 	help
 	  wheel_power_soc_suspend() arms the selected INT pin for GPIO SENSE and
 	  calls sys_poweroff(); the INT event then reboots the chip. Keep this off
 	  during bring-up: after System OFF the debugger only reconnects after a
 	  wake event.
+
+	  Requires CSC_POWER_WAKE_LINE_WIRED: on a stock board there is no wake
+	  source at all, and nRF54L15 has no timer wake from System OFF to fall
+	  back on.
 
 config CSC_DFU
 	bool "On-demand firmware update (DFU) over BLE"
