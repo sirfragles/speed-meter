@@ -322,19 +322,76 @@ Diagnostyka (bench): `wheel battery` → `battery: 3012 mV, 90% (last published 
 
 ## Warianty buildów
 
-| Wariant | Komenda (`-DEXTRA_CONF_FILE=`) | Uwagi |
+Dwa obrazy **produkcyjne**, różniące się tym, jak urządzenie zasypia. Reszta
+(polling pojedynczej próbki, detektor, CSCS) jest w obu ta sama.
+
+| Wariant | Komenda (`-DEXTRA_CONF_FILE=`) | Płytka | Co śpi po 300 s |
+|---|---|---|---|
+| **stock** | `debug.conf;diag.conf;stock.conf;dfu.conf` + `--sysbuild` | **fabryczna, bez przeróbek** | radio |
+| **production** | `debug.conf;diag.conf;power.conf;dfu.conf` + `--sysbuild` | z drucikiem INT1 → P1.05 | SoC (System OFF) |
+
+Warianty pomocnicze (nie do wypuszczania):
+
+| Wariant | Komenda | Uwagi |
 |---|---|---|
 | baza (symulacja) | — | tylko `prj.conf`; `CONFIG_CSC_SIMULATE=y` |
+| gpio | `debug.conf;gpio.conf` | czujnik Halla / kontaktron |
 | bench | `debug.conf;diag.conf` | MCUmgr/SMP + shell `wheel` |
 | bench + FIFO | `debug.conf;diag.conf;stream.conf` | dodatkowo shell sterownika `lis2dh` |
-| produkcja (DFU) | `debug.conf;diag.conf;power.conf;dfu.conf` + `--sysbuild` | źródło akcelerometrowe, sen/wake, MCUboot |
 
-> `power.conf` włącza źródło akcelerometrowe (`CSC_WHEEL_SENSOR_ACCEL`, zamiast
-> symulacji) razem z oszczędzaniem energii.
+### Dlaczego dwa warianty i dlaczego akurat tak
+
+Na fabrycznym module **nie ma czym wybudzić głębokiego snu**, i to jest fakt
+z devicetree SoC, nie ostrożność:
+
+| Linia | Pin | GPIOTE / SENSE |
+|---|---|---|
+| LIS2DH INT1 | P2.00 (legacy trace) | ❌ port P2 nie ma `gpiote-instance` |
+| LIS2DH INT2 | P2.03 | ❌ to samo |
+| przycisk | P1.13 | ✅ ale wymaga człowieka |
+
+Na nRF54L15 port 2 nie ma instancji GPIOTE — `gpiote30` należy do `gpio0`,
+`gpiote20` do `gpio1`, a `gpio2` nie ma tej właściwości wcale. System OFF nie ma
+na tym układzie wybudzania timerem, więc jedyne źródła to GPIO SENSE, NFC,
+analog i RESET. Skoro nie ma pinu, **wariant stock nie może wchodzić
+w System OFF** — wszedłby i nigdy nie wrócił.
+
+Wariantu stock nie ratuje zmiana `CSC_POWER_WAKE_INT2`: INT2 też siedzi na P2.
+
+Dlatego tier 3 ma dwa zakończenia:
+
+| | stock | production |
+|---|---|---|
+| po 300 s | `bt_prepare_sleep()` — radio off | `sys_poweroff()` — System OFF |
+| sensor | 1 Hz (już od tier 2) | 1 Hz |
+| co budzi | **polling 1 Hz** (`STANDBY_POLL_US`) | INT1 na P1.05, restart układu |
+| autostart bez przycisku | tak, do ~1 s | tak |
+
+Rdzeń zostaje w System ON idle i próbkuje co 1 s. To, co naprawdę zjada
+ogniwo, to radio — reklamowanie co 100 ms plus podtrzymywane łącza to dziesiątki
+µA, podczas gdy rdzeń w idle między dwoma pollami to kilka. Wariant stock jest
+więc droższy o kilka µA, ale **nie wymaga lutowania**.
+
+> **Nie zweryfikowane na sprzęcie:** o ile dokładnie droższy. Pomiar poboru dla
+> obu wariantów jest do zrobienia i powinien trafić do planu testów, zanim ktoś
+> obieca „rok na CR2032" dla stocka.
+
+> `power.conf` i `stock.conf` różnią się jednym: pierwszy ustawia
+> `CSC_POWER_WAKE_LINE_WIRED=y`, a na tym symbolu wisi `CSC_POWER_SYSTEM_OFF`.
+> **System OFF bez zadeklarowanego drucika to błąd Kconfig**, nie cicha pomyłka:
+> wymuszenie `SYSTEM_OFF=y` przy `stock.conf` daje `n` w `.config` i ostrzeżenie
+> Kconfig nazywające symbol.
 >
+> Bramka chroni przed złą **konfiguracją**, nie przed wgraniem złego **pliku**:
+> obraz `production` na fabrycznej płytce nadal wejdzie w System OFF i nie
+> wstanie. Dlatego oba pliki mają to w nagłówku.
+
 > **Nie łącz `stream.conf` z `power.conf`** w jednym buildzie: `stream.conf`
 > rejestruje handler przerwania sterownika na linii INT1, której `wheel_power`
 > używa do uzbrojenia wybudzania z System OFF — oba na raz walczyłyby o ten pin.
+> Gdy FIFO wejdzie do produkcji, wymaga to jawnego uzgodnienia kolejności
+> (patrz plan).
+
 
 ## Kontekst gałęzi
 

@@ -143,6 +143,18 @@ void bt_prepare_sleep(void)
 	bt_conn_foreach(BT_CONN_TYPE_LE, disconnect_one, NULL);
 }
 
+void bt_resume(void)
+{
+	/*
+	 * The mirror image, and the reason the flag is not simply set and
+	 * forgotten: on a board without a wake line the radio is what goes to
+	 * sleep, and this runs again on the next revolution with no reboot in
+	 * between.
+	 */
+	(void)atomic_set(&adv_suppressed, 0);
+	bt_start_advertising();
+}
+
 /* Finite blink: N cycles via the software blinker, then off. */
 static inline void bt_led_blink_n(uint32_t cycles, uint32_t on_ms, uint32_t off_ms)
 {

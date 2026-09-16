@@ -219,19 +219,23 @@ config CSC_POWER_IDLE_TIMEOUT_S
 	  events, which is where the saving is.
 
 config CSC_POWER_DEEP_SLEEP_TIMEOUT_S
-	int "Standstill timeout before disconnecting and powering down (seconds)"
+	int "Standstill timeout before the ride is considered over (seconds)"
 	default 300
 	range 30 3600
-	depends on CSC_POWER_SAVE && CSC_POWER_SYSTEM_OFF
+	depends on CSC_POWER_SAVE
 	help
-	  Tier 3: after this long without a revolution the ride is considered
-	  over. The device drops its BLE links and enters System OFF; the first
-	  wheel movement wakes it and the watch reconnects by itself.
+	  Tier 3: after this long without a revolution the ride is over. The BLE
+	  links are dropped and the advertising stops; the first wheel movement
+	  brings them back and the watch reconnects by itself.
 
-	  This is what makes a year on a CR2032 possible: without it a connected
-	  client would keep the device awake around the clock. It must stay well
-	  above the traffic-light scale - the default of 5 minutes is the
-	  behaviour of the commercial speed sensors.
+	  What sleeps then depends on the board. With CSC_POWER_SYSTEM_OFF the SoC
+	  powers down and the wake is a reboot - the cheapest, and it needs the
+	  INT1 wire. Without it the radio sleeps and a 1 Hz poll watches for the
+	  wheel moving again; that works on any board and costs a few microamps
+	  more. Either way this symbol sets when the ride is declared over.
+
+	  It must stay well above the traffic-light scale - the default of 5
+	  minutes is the behaviour of the commercial speed sensors.
 
 config CSC_POWER_WAKE_THS
 	int "Wake threshold (INTx_THS, in +/-2g digits)"
@@ -248,8 +252,10 @@ config CSC_POWER_WAKE_LINE_WIRED
 	depends on CSC_POWER_SAVE
 	help
 	  The HOLYIOT-25008 ships with the LIS2DH12 INT1 on P2.00. Port 2 on
-	  nRF54L15 has no GPIOTE and no SENSE/DETECT, so a pin there can neither
-	  raise an interrupt nor wake the SoC. The devicetree therefore routes
+	  nRF54L15 has no GPIOTE and no SENSE/DETECT - the SoC devicetree gives
+	  gpiote30 to gpio0 and gpiote20 to gpio1, and gpio2 carries no
+	  gpiote-instance property at all - so a pin there can neither raise an
+	  interrupt nor wake the SoC. The board devicetree therefore routes
 	  irq-gpios[0] to P1.05 (UART RX), which only describes reality once a
 	  wire from INT1 to that pad exists.
 
@@ -268,9 +274,13 @@ config CSC_POWER_SYSTEM_OFF
 	  during bring-up: after System OFF the debugger only reconnects after a
 	  wake event.
 
-	  Requires CSC_POWER_WAKE_LINE_WIRED: on a stock board there is no wake
-	  source at all, and nRF54L15 has no timer wake from System OFF to fall
-	  back on.
+	  Requires CSC_POWER_WAKE_LINE_WIRED: System OFF has no timer wake on this
+	  part, so a board without the wire would sleep permanently.
+
+	  A build without this symbol still has a tier 3 - the links and the
+	  advertising stop and the 1 Hz wheel poll is what brings them back - and
+	  that is what stock.conf uses. It costs a few microamps more than System
+	  OFF and needs nothing soldered.
 
 config CSC_DFU
 	bool "On-demand firmware update (DFU) over BLE"

@@ -163,13 +163,19 @@ fact rather than a preference: whether the LIS2DH12 INT1 is wired to P1.05.
 |---|---|---|
 | INT1 wire | required | none |
 | Tier 2 (sensor 1 Hz, link kept) | yes | yes |
-| Tier 3 (System OFF, wake on rotation) | yes | **cannot work** |
-| Battery | a year on a CR2032 | the SoC never powers down |
+| Tier 3, parking | System OFF, wake on rotation | radio off, 1 Hz poll wakes it |
+| What wakes it | INT1 on P1.05, a reboot | the sampling thread itself |
+| Battery | a year on a CR2032 | a few µA more; the radio, not the core, is the load |
 
 `stock.conf` cannot reach System OFF even by accident: the option depends on
 `CSC_POWER_WAKE_LINE_WIRED`, which only `power.conf` sets, so setting it on an
 unmodified board is a Kconfig error rather than a device that powers down and
 never comes back.
+
+That gate protects against a wrong *configuration*, not against flashing the
+wrong *file*: a `production` image on an unmodified board still goes to System
+OFF. Both file headers say so, and the failure is one reset away from recovery
+rather than permanent.
 
 ---
 

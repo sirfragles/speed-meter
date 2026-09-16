@@ -27,4 +27,17 @@ void bt_start_advertising(void);
  */
 void bt_prepare_sleep(void);
 
+/**
+ * @brief Undo bt_prepare_sleep(): advertise again.
+ *
+ * Needed by boards where System OFF is not used and the radio is what sleeps
+ * instead - there the device comes back without a reboot, so something has to
+ * lift the suppression. Until this existed the flag was a one-way door, which
+ * was fine only because its single caller was followed by sys_poweroff().
+ *
+ * Safe to call when already advertising: bt_le_adv_start() returns -EALREADY
+ * and that is handled.
+ */
+void bt_resume(void);
+
 #endif /* SPEED_METER_BT_H_ */

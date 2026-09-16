@@ -24,9 +24,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* IS_ENABLED() below, for the System OFF guard. */
-#include <zephyr/sys/util_macro.h>
-
 /* Three-tier standstill policy, mirroring what the commercial speed sensors do:
  *
  *   tier 1  0 .. WHEEL_POWER_IDLE_TIMEOUT_S
@@ -36,22 +33,24 @@
  *           stop at a traffic light does not drop the watch connection, and the
  *           CPU stays idle between connection events.
  *   tier 3  beyond WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S
- *           the ride is over: links dropped, SoC into System OFF. The next
- *           wheel movement wakes the chip and the client reconnects by itself.
+ *           the ride is over: links dropped, advertising stopped. What sleeps
+ *           then depends on the board. With System OFF the SoC powers down and
+ *           the next wheel movement is a reboot; without a wake line only the
+ *           radio sleeps and a 1 Hz poll watches for the wheel, which works on
+ *           any board at the cost of a few microamps.
  *
  * Tier 3 is what makes a CR2032 last a season: a connected client would
  * otherwise keep the device awake around the clock.
  */
 #define WHEEL_POWER_IDLE_TIMEOUT_S CONFIG_CSC_POWER_IDLE_TIMEOUT_S
 
-#if IS_ENABLED(CONFIG_CSC_POWER_SYSTEM_OFF)
-#define WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S CONFIG_CSC_POWER_DEEP_SLEEP_TIMEOUT_S
-#else
-/* Without System OFF there is no tier 3. Keep it finite so that
- * (int64_t)WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S * 1000 cannot overflow.
+/*
+ * Not conditional on System OFF. It used to be - the guard said "without System
+ * OFF there is no tier 3" and substituted INT32_MAX - but that stopped being
+ * true once the radio-off path existed: a board with no wake line still has a
+ * tier 3, it just sleeps a different thing. Same timeout, both builds.
  */
-#define WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S INT32_MAX
-#endif
+#define WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S CONFIG_CSC_POWER_DEEP_SLEEP_TIMEOUT_S
 
 /* Initialise the module and put the sensor into the active (measuring) mode. */
 int wheel_power_init(void);

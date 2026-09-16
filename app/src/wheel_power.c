@@ -80,6 +80,7 @@ static const struct spi_dt_spec lis_spi =
 
 static bool standby;
 static bool inited;
+static bool radio_off;
 static int64_t last_activity_ms;
 
 static int reg_write(uint8_t reg, uint8_t value)
@@ -206,10 +207,22 @@ void wheel_power_report(bool rotating)
 
 	if (rotating) {
 		last_activity_ms = k_uptime_get();
+
 		if (standby) {
 			(void)wheel_power_set_active();
+		}
+
+		/*
+		 * Only when tier 3 actually ran. On a board without a wake line the
+		 * chip survived it - there was no reboot to reset anything - so the
+		 * radio has to be brought back by hand. That is the whole "wake" on
+		 * such a board, and the 1 Hz poll is what triggers it.
+		 */
+		if (radio_off) {
+			radio_off = false;
 			wheel_power_soc_resume();
 		}
+
 		return;
 	}
 
@@ -230,21 +243,27 @@ void wheel_power_report(bool rotating)
 			WHEEL_POWER_IDLE_TIMEOUT_S);
 	}
 
-#if IS_ENABLED(CONFIG_CSC_POWER_SYSTEM_OFF)
 	/*
 	 * Tier 3 - the ride is over. Waiting this long means the bike is parked,
-	 * not waiting at a light: drop the links and power the SoC down.
+	 * not waiting at a light: advertising stops and every link is dropped.
 	 *
-	 * This is what makes a CR2032 last: without it a connected client would
-	 * keep the device awake around the clock. The first wheel movement
-	 * wakes the chip and the watch reconnects on its own.
+	 * This is what makes a CR2032 last. A client that stays connected keeps
+	 * the radio busy around the clock, and the radio is by far the largest
+	 * load on the cell - far more than the core.
+	 *
+	 * What "sleeping" then means depends on whether this board has a wake
+	 * line, and wheel_power_soc_suspend() is where that difference lives:
+	 * System OFF where INT1 is wired, radio off where it is not. The latch is
+	 * for the second case - the chip keeps running there, so without it this
+	 * would fire again on every pass through wheel_power_report().
 	 */
-	if (standby && idle_ms >= (int64_t)WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S * 1000) {
-		LOG_INF("Wheel still for %d s - ride over, entering System OFF",
+	if (standby && !radio_off &&
+	    idle_ms >= (int64_t)WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S * 1000) {
+		radio_off = true;
+		LOG_INF("Wheel still for %d s - ride over",
 			WHEEL_POWER_DEEP_SLEEP_TIMEOUT_S);
 		wheel_power_soc_suspend();
 	}
-#endif /* CONFIG_CSC_POWER_SYSTEM_OFF */
 }
 
 int wheel_power_set_active(void)
@@ -311,15 +330,43 @@ __weak void wheel_power_soc_suspend(void)
 	nrf_gpio_cfg_sense_input(pin, NRF_GPIO_PIN_PULLDOWN,
 				 NRF_GPIO_PIN_SENSE_HIGH);
 	nrfx_reset_reason_clear(UINT32_MAX);
+	LOG_INF("power: System OFF, wake on %s at P%d.%02d",
+		IS_ENABLED(CONFIG_CSC_POWER_WAKE_INT2) ? "INT2" : "INT1",
+		(int)WAKE_GPIO_PORT, (int)WAKE_GPIO_PIN);
 	sys_poweroff();
 #else
-	/* No System OFF configured: the sensor sleeps, the SoC stays up. */
-	LOG_DBG("SoC suspend (CONFIG_CSC_POWER_SYSTEM_OFF=n)");
+	/*
+	 * No wake line on this board, so System OFF would be a one-way door:
+	 * this part has no timer wake, and the accelerometer's INT1/INT2 sit on
+	 * port P2, which carries no GPIOTE instance on nRF54L15 (the SoC
+	 * devicetree gives gpiote30 to gpio0 and gpiote20 to gpio1; gpio2 has
+	 * no gpiote-instance property at all). Arming that pin and calling
+	 * sys_poweroff() would leave a board that never answers again.
+	 *
+	 * So the radio is what sleeps - and it is also the part that costs the
+	 * most. Advertising every 100 ms plus a maintained link runs to tens of
+	 * microamps, while the core in System ON idle between two 1 Hz polls
+	 * costs a few. The sampling thread keeps running at STANDBY_POLL_US
+	 * through all of this, and noticing the wheel turn there is what brings
+	 * the radio back. That poll, not a hardware event, is the wake source.
+	 */
+	bt_prepare_sleep();
+	LOG_INF("power: radio off, wheel polled at 1 Hz (no wake line on this board)");
 #endif
 }
 
 __weak void wheel_power_soc_resume(void)
 {
+#if IS_ENABLED(CONFIG_CSC_POWER_SYSTEM_OFF)
 	/* Wake from System OFF is a reboot - nothing to resume here. */
 	LOG_DBG("SoC resume (no-op: wake is a reboot)");
+#else
+	/*
+	 * The counterpart to the radio-off path above, and the reason it is not
+	 * a one-way door: the chip never stopped, so the radio has to be
+	 * started again explicitly.
+	 */
+	LOG_INF("power: radio on - wheel turning again");
+	bt_resume();
+#endif
 }
