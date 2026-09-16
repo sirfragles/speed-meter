@@ -157,28 +157,44 @@ docker run --rm -v "$PWD":/workdir ghcr.io/zephyrproject-rtos/zephyr-build:main 
 
 ## Testing
 
-The revolution detector (`app/src/wheel_detector.c`) makes no Zephyr calls on
-purpose, so it is tested by replaying motion recorded from a real board through
-the production source file — no hardware, no cross toolchain:
+Everything under `tests/` runs on the host — no board, no cross toolchain:
 
 ```sh
-west twister -T tests/wheel_detector -p native_sim/native/64
+west twister -T tests -p native_sim/native/64
 ```
 
-Four captures in `tests/wheel_detector/fixtures/` hold real wheel motion taken
-over BLE with `app/tools/wheel_cal.py`. The expected revolution counts are
-pinned in the test, so a change in detector behaviour fails the build instead of
-quietly changing the speeds it reports.
+| Suite | What it covers |
+|---|---|
+| `wheel_detector` | the revolution detector, replaying motion recorded from a real board |
+| `wheel_csc` | the CSCS wire state: event-time clock and cumulative counter |
+| `wheel_reconfig` | the fail-closed gate around sensor reconfiguration |
+| `wheel_source` | the sampling loop, against a controllable fake accelerometer |
 
-See [`tests/wheel_detector/README.md`](tests/wheel_detector/README.md) for what
-the captures are, and for the two defects the tests record as things stand: one
-capture that never locks, and a radius fit that does not converge.
+The first three are pure logic, so they are deterministic. `wheel_source` goes
+through the Zephyr sensor API: it supplies a fake driver (`vnd,fake-accel`) that
+can report a fresh sample, `-ENODATA` or a failing bus, and drives the sampling
+loop one pass at a time instead of racing its own thread.
+
+### What the tests are evidence of
+
+Not every suite proves the same thing, and it matters which is which.
+
+- Each fix in this series was **written to fail first** against the behaviour
+  it replaces, and the failing output is recorded in the commit that fixed it.
+  That includes the fetch-classification tests in `wheel_source`, which fail
+  against the old "every outcome is the same" handling.
+- `wheel_detector`'s recorded captures pin the detector's *current* behaviour,
+  not a known-correct revolution count. They catch any change; they do not yet
+  prove the count is right. That needs a recording with independently counted
+  revolutions — see `tests/wheel_detector/README.md`.
+- Two defects are recorded rather than fixed, because they need that recording:
+  `verify10` never locks, and the radius fit does not converge.
 
 ### What CI runs
 
 | Job | What it checks |
 |---|---|
-| `detector replay` | the detector against the recorded captures |
+| `host tests` | every suite under `tests/` on `native_sim` |
 | `build` | all five configurations; a ROM/RAM report lands in the run summary |
 | `Release` | on a `v*` tag, publishes the three firmware images |
 
@@ -238,7 +254,7 @@ same firmware. Bump the pin deliberately to pick up driver changes.
 |---|---|
 | Module | HOLYIOT-25008 (nRF54L15, 1.5 MB RRAM, 256 kB RAM) |
 | Accelerometer | LIS2DH12 over SPI (SCK P2.01, MOSI P2.02, MISO P2.04, CS P2.05) |
-| Wake line | LIS2DH12 INT1 → **P1.05** (a P1 pin: P2 has no SENSE/DETECT on nRF54L15) |
+| Wake line | LIS2DH12 INT1 → **P1.05** — needs a board modification, see below |
 | Button | P1.13 |
 | LEDs | red P2.09, green P1.10, blue P2.07 |
 | Power | CR2032 on VDD, measured through the internal SAADC channel |
@@ -248,9 +264,12 @@ same firmware. Bump the pin deliberately to pick up driver changes.
 - **Never short a wheel sensor to a P2 pin.** Port 2 on nRF54L15 has no GPIOTE
   and no SENSE/DETECT, so it can neither raise an interrupt nor wake the chip —
   P2 is polling-only.
-- **P1.05 is UART RX**, so `uart20` is disabled everywhere and logging goes over
-  RTT (J-Link). This keeps a bootloader that enables UART from fighting the
-  LIS2DH INT1 push-pull output.
+- **P1.05 is UART RX.** Driving the LIS2DH12 INT1 into it requires a **physical
+  modification of the board** — it is not how the module ships. Without that
+  wire everything works except the wake from System OFF: tier 3 of the power
+  state machine will not come back on its own. `uart20` is disabled everywhere
+  and logging goes over RTT (J-Link), so a bootloader that enables UART cannot
+  fight the INT1 push-pull output.
 
 ---
 
