@@ -50,16 +50,42 @@ behaviour changed, which has to be explained rather than quietly re-recorded.
 
 Both need a hardware session with a known revolution count to settle.
 
-**`verify10` never locks.** The capture holds real motion — 1.8 g peak-to-peak,
-with 61% of samples moving faster than the detector's 0.5 m/s² movement gate —
-yet the detector ends in IDLE having counted nothing. The other three captures
-lock within 400 samples. Recorded as `locks = false` so a passing suite cannot
-hide it.
+**`verify10` never locks — the movement gate latches itself off.** The
+instrumentation in `det.stats`, printed by the replay, says the plane fit is
+never even attempted: 0 attempts, 0 successes, 0 phase resets. The detector
+never leaves IDLE.
 
-It is not a gate problem: the samples *do* exceed the gate. Something later in
-the path — the plane fit quality, or the phase unwrap — is rejecting the data.
-The capture's peak movement (651 mg) is well below the other three
-(1893–2618 mg), which is the first thing to look at.
+The cause is an estimate that feeds on its own output:
+
+```c
+gate   = max(4 * noise_ms2, still_gate_ms2);
+moving = offset_from_gravity(v) > gate;   /* below the gate counts as "still" */
+update_still(v);                          /* noise = peak-to-peak of those */
+```
+
+If the wheel starts turning while the first 50-sample "still" window is open,
+that window catches part of the rotation, the peak-to-peak comes out at
+6.42 m/s², and the gate becomes 4 × 6.42 = 25.69 m/s² — larger than the whole
+gravity circle (at most ~2 g ≈ 19.6 m/s²). After that nothing can be classified
+as moving again.
+
+Measured across the four captures:
+
+| Capture | moving samples | still windows | noise | gate | plane attempts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `autocal_capture` | 1723/1725 | 0 | 0.00 | 0.50 | 1 |
+| `ride1` | 2167/2179 | 0 | 0.00 | 0.50 | 1 |
+| `verify10` | **48/1710** | 33 | **6.42** | **25.69** | **0** |
+| `verify_manual` | 3669/4096 | 0 | 0.00 | 0.50 | 1 |
+
+An earlier version of this file said "it is not a gate problem: the samples *do*
+exceed the gate". That was measured against the raw sample-to-sample change,
+which is not what the gate compares — it compares against the running mean
+gravity. The claim was wrong; this is the correction.
+
+Not fixed here. The fix changes detector behaviour, and the plan puts that
+behind a recording with independently counted revolutions — otherwise there is
+no way to tell an improvement from a different wrong answer.
 
 **The radius fit does not converge to anything physical.** The fitted
 sensor-to-axis distance comes out as 0.49 m, 0.094 m and 0.0003 m across the

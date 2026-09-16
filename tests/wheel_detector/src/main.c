@@ -83,6 +83,18 @@ struct replay {
 	float speed_kmh;
 	float radius_m;
 	enum wheel_detector_state state;
+
+	/* What the calibration did - see struct wheel_detector in the header. */
+	uint32_t plane_attempts;
+	uint32_t plane_successes;
+	uint32_t window_slides;
+	uint32_t phase_resets;
+	float last_quality;
+	float best_quality;
+	uint32_t moving_samples;
+	uint32_t still_windows;
+	float noise_last;
+	float gate_last;
 };
 
 static struct replay replay_capture(const struct fixture *fx)
@@ -132,6 +144,16 @@ static struct replay replay_capture(const struct fixture *fx)
 	out.speed_kmh = res.speed_kmh;
 	out.radius_m = res.radius_m;
 	out.state = res.state;
+	out.plane_attempts = det.stats.plane_attempts;
+	out.plane_successes = det.stats.plane_successes;
+	out.window_slides = det.stats.window_slides;
+	out.phase_resets = det.stats.phase_resets;
+	out.last_quality = det.stats.last_quality;
+	out.best_quality = det.stats.best_quality;
+	out.moving_samples = det.stats.moving_samples;
+	out.still_windows = det.stats.still_windows;
+	out.noise_last = det.stats.noise_last;
+	out.gate_last = det.stats.gate_last;
 	return out;
 }
 
@@ -190,6 +212,19 @@ ZTEST(wheel_detector, test_replay_recorded_captures)
 		       r.locked ? "@" : "never", r.locked_at,
 		       (double)r.rpm, (double)r.speed_kmh,
 		       (double)r.radius_m, r.state);
+		/* 0.55 mirrors DET_MIN_PLANE_QUALITY, which is private to
+		 * wheel_detector.c - printed here so the threshold is visible next
+		 * to the qualities it accepted or rejected. */
+		printk("                 plane: %u attempts, %u ok, %u slides; "
+		       "phase resets %u; quality last=%.3f best=%.3f (threshold 0.55)\n",
+		       r.plane_attempts, r.plane_successes, r.window_slides,
+		       r.phase_resets, (double)r.last_quality,
+		       (double)r.best_quality);
+
+		printk("                 gate: %u/%zu samples moving, %u still windows, "
+		       "noise=%.2f gate=%.2f\n",
+		       r.moving_samples, fx->count, r.still_windows,
+		       (double)r.noise_last, (double)r.gate_last);
 
 		zassert_equal(r.locked, want->locks,
 			      "%s: lock state changed (recorded %s)",

@@ -47,6 +47,7 @@ static void clear_revolution(struct wheel_detector *det)
 
 static void reset_phase(struct wheel_detector *det)
 {
+	det->stats.phase_resets++;
 	det->phase_valid = false;
 	det->phase_acc = 0.0;
 	clear_revolution(det);
@@ -83,6 +84,7 @@ static void update_still(struct wheel_detector *det, const float *v)
 			peak = fmaxf(peak, det->still_max[k] - det->still_min[k]);
 		}
 		det->noise_ms2 = peak;
+		det->stats.still_windows++;
 		reset_still_window(det);
 	}
 }
@@ -217,6 +219,18 @@ static bool plane_solve(struct wheel_detector *det)
 	}
 
 	float quality = (float)(1.0 - lam[imin] / lam[imax]);
+
+	/*
+	 * Recorded before the threshold check, so a rejected quality is still
+	 * visible: "the plane fit failed" on its own says nothing about by how
+	 * much, and the difference tells "nearly planar" from "nothing like a
+	 * plane at all".
+	 */
+	det->stats.plane_attempts++;
+	det->stats.last_quality = quality;
+	if (quality > det->stats.best_quality) {
+		det->stats.best_quality = quality;
+	}
 
 	if (!isfinite(quality) || quality < DET_MIN_PLANE_QUALITY) {
 		return false;
@@ -614,6 +628,12 @@ struct wheel_detector_result wheel_detector_update(struct wheel_detector *det,
 	bool moving = offset_from_gravity(det, v) > gate;
 	bool added = false;
 
+	det->stats.noise_last = det->noise_ms2;
+	det->stats.gate_last = gate;
+	if (moving) {
+		det->stats.moving_samples++;
+	}
+
 	if (moving) {
 		det->move_n++;
 		det->last_move_t = time_s;
@@ -649,6 +669,7 @@ struct wheel_detector_result wheel_detector_update(struct wheel_detector *det,
 			}
 			if (det->win_len >= WHEEL_PLANE_MAX) {
 				if (plane_solve(det)) {
+					det->stats.plane_successes++;
 					/* Replay the window so the first revolutions
 					 * of this spin are not lost. */
 					for (uint32_t i = 0; i < det->win_len; i++) {
@@ -662,6 +683,7 @@ struct wheel_detector_result wheel_detector_update(struct wheel_detector *det,
 							      s, &out);
 					}
 				} else {
+					det->stats.window_slides++;
 					/* Keep the newer half and learn on.
 					 *
 					 * The surviving samples must be

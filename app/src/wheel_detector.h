@@ -122,6 +122,30 @@ struct wheel_detector {
 	float confidence;
 	double period_hist[4]; /* recent periods (newest first), median filtered */
 	uint32_t period_n;
+
+	/*
+	 * What the calibration actually did.
+	 *
+	 * "It did not lock" is otherwise unanswerable from the outside: this says
+	 * whether the plane fit was attempted at all, what quality it rejected,
+	 * and whether the calibration window was sliding instead of settling.
+	 */
+	struct {
+		uint32_t plane_attempts;
+		uint32_t plane_successes;
+		uint32_t window_slides;
+		uint32_t phase_resets;
+		float last_quality;
+		float best_quality;
+
+		/* The movement gate, which has to be passed before any of the
+		 * above can happen: it is max(4 * noise, still_gate) and the noise
+		 * estimate is fed by the samples the gate itself rejected. */
+		uint32_t moving_samples;
+		uint32_t still_windows;
+		float noise_last;
+		float gate_last;
+	} stats;
 };
 
 /**
