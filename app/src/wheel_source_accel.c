@@ -26,6 +26,7 @@
 #include "wheel_config.h"
 #include "wheel_csc.h"
 #include "wheel_detector.h"
+#include "wheel_reconfig.h"
 
 #if IS_ENABLED(CONFIG_CSC_POWER_SAVE)
 #include "wheel_power.h"
@@ -52,10 +53,14 @@ static bool det_ready;
  * slow enough to cost nothing, fast enough to notice the wheel moving again. */
 #define STANDBY_POLL_US 1000000U
 
+/* How long to wait before retrying a configuration the sensor rejected. */
+#define CONFIG_RETRY_MS 2000U
+
 /* CSCS wire state: event-time clock and cumulative revolution counter. */
 static struct wheel_csc csc_state;
-static uint32_t applied_odr_hz;
-static uint8_t applied_range_g;
+
+/* Fail-closed gate: which configuration the sensor and detector agree on. */
+static struct wheel_reconfig reconfig;
 
 static uint64_t now_us(void)
 {
@@ -80,7 +85,7 @@ static void power_report(bool rotating)
 #endif
 }
 
-static void accel_apply_config(void)
+static bool accel_apply_config(void)
 {
 	const struct wheel_config *cfg = wheel_config_get();
 	struct wheel_detector_config det_cfg = {
@@ -98,30 +103,41 @@ static void accel_apply_config(void)
 	odr.val2 = 0;
 	sensor_g_to_ms2(cfg->range_g, &full_scale);
 
+	/*
+	 * The sensor first, and all-or-nothing. The ODR may be accepted while the
+	 * full scale is rejected, and the sensor then holds neither the old values
+	 * nor the new ones - so the detector must not be re-initialised until both
+	 * took effect. Reporting a partial success would leave it classifying
+	 * saturated samples as good, because its idea of full scale would
+	 * disagree with the hardware's.
+	 */
 	if (sensor_attr_set(accel, SENSOR_CHAN_ACCEL_XYZ,
 			    SENSOR_ATTR_SAMPLING_FREQUENCY, &odr) != 0) {
 		LOG_WRN("cannot set ODR to %u Hz", cfg->odr_hz);
+		return false;
 	}
 	if (sensor_attr_set(accel, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_FULL_SCALE,
 			    &full_scale) != 0) {
 		LOG_WRN("cannot set full scale to +/-%u g", cfg->range_g);
+		return false;
 	}
 
 	/*
-	 * Re-initialise the detector whenever the sampling or geometry changes:
-	 * a different ODR or circumference invalidates the plane fit and the
-	 * radius estimate.
+	 * A different ODR, range or geometry invalidates the plane fit and the
+	 * radius estimate, so the detector starts over. That zeroes its own
+	 * revolution count, which is why the published counter lives in wheel_csc
+	 * and advances by deltas: a re-initialisation is an internal event and
+	 * must not be visible to the host.
 	 */
 	det_ready = wheel_detector_init(&det, &det_cfg);
 	if (!det_ready) {
 		LOG_ERR("wheel detector init failed");
-		return;
+		return false;
 	}
 
-	applied_odr_hz = cfg->odr_hz;
-	applied_range_g = cfg->range_g;
 	LOG_INF("Wheel source: accelerometer (circ %u mm, %u Hz, +/-%u g)", cfg->circ_mm,
 		cfg->odr_hz, cfg->range_g);
+	return true;
 }
 
 /** Publish one revolution, deriving the CSCS event time from real timestamps. */
@@ -163,11 +179,43 @@ static void accel_thread(void *arg1, void *arg2, void *arg3)
 			continue;
 		}
 
-		/* Pick up `wheel cal set odr_hz|range_g` without a reboot. */
-		if (cfg->odr_hz != applied_odr_hz || cfg->range_g != applied_range_g) {
-			accel_apply_config();
-			/* Force the cadence below to restart from "now". */
-			period_us = 0;
+		/* Pick up a `wheel cal set ...` without a reboot, including the
+		 * geometry the detector copies at init - circumference and rpm_max
+		 * used to be ignored here, leaving it computing with stale values. */
+		{
+			struct wheel_reconfig_keys wanted = {
+				.odr_hz = cfg->odr_hz,
+				.range_g = cfg->range_g,
+				.circ_mm = cfg->circ_mm,
+				.rpm_max = cfg->rpm_max,
+			};
+
+			if (wheel_reconfig_needed(&reconfig, &wanted)) {
+				if (!wheel_reconfig_may_retry(&reconfig, k_uptime_get())) {
+					/*
+					 * Fail-closed: the sensor and the detector may
+					 * disagree, so nothing is forwarded and no
+					 * revolution is published. The CSC counters
+					 * live outside this gate and keep their
+					 * values, so the host sees no gap beyond the
+					 * one that really happened.
+					 */
+					k_sleep(K_MSEC(100));
+					continue;
+				}
+
+				if (!accel_apply_config()) {
+					wheel_reconfig_failed(&reconfig,
+							      k_uptime_get(),
+							      CONFIG_RETRY_MS);
+					k_sleep(K_MSEC(100));
+					continue;
+				}
+
+				wheel_reconfig_applied(&reconfig, &wanted);
+				/* Force the cadence below to restart from "now". */
+				period_us = 0;
+			}
 		}
 
 		want_us = power_standby() ? STANDBY_POLL_US : 1000000U / cfg->odr_hz;
@@ -223,6 +271,7 @@ int wheel_source_accel_init(void)
 	 * host as the distance counter jumping backwards.
 	 */
 	wheel_csc_init(&csc_state);
+	wheel_reconfig_init(&reconfig);
 
 	if (!device_is_ready(accel)) {
 		LOG_ERR("accelerometer not ready");

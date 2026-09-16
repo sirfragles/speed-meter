@@ -23,6 +23,9 @@ target_sources(app PRIVATE src/wheel_config.c)
 # Free of Zephyr dependencies so it can be unit-tested on the host.
 target_sources(app PRIVATE src/wheel_csc.c)
 
+# Fail-closed gate for sensor reconfiguration. Same reasoning.
+target_sources(app PRIVATE src/wheel_reconfig.c)
+
 # CR2032 measurement through the SAADC internal VDD input + Battery Service.
 target_sources_ifdef(CONFIG_CSC_BATTERY app PRIVATE src/battery.c)
 

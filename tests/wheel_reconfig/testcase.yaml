@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  app.wheel_reconfig:
+    # The fail-closed contract: what the wheel source is allowed to forward to
+    # the detector while the sensor configuration is not known to be good.
+    platform_allow:
+      - native_sim/native/64
+    tags:
+      - sensor
+      - unit
+    timeout: 60
