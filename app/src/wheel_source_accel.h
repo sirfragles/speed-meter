@@ -26,11 +26,31 @@
 #include <stdint.h>
 
 /**
+ * @brief How the source classified the outcomes of its bus accesses.
+ *
+ * This is not the detector's state. It is the distinction the sampling loop
+ * has to make: "there is no new sample yet" is normal at a polling rate equal
+ * to the ODR, while a bus error means samples were genuinely lost and the
+ * detector has to be told.
+ */
+struct wheel_source_stats {
+	uint32_t samples; /* forwarded to the detector */
+	uint32_t no_data; /* -ENODATA: nothing new, nothing lost */
+	uint32_t lost;    /* discontinuity signalled to the detector */
+};
+
+/**
  * @brief Start sampling the accelerometer and publishing wheel revolutions.
  *
  * @return 0 on success, negative errno if the sensor is not ready.
  */
 int wheel_source_accel_init(void);
+
+/** @brief Read the counters since the last reset. */
+void wheel_source_accel_stats(struct wheel_source_stats *out);
+
+/** @brief Zero the counters. */
+void wheel_source_accel_stats_reset(void);
 
 /**
  * @brief One pass of the sampling loop.

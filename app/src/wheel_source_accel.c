@@ -62,6 +62,19 @@ static struct wheel_csc csc_state;
 /* Fail-closed gate: which configuration the sensor and detector agree on. */
 static struct wheel_reconfig reconfig;
 
+/* How the bus accesses went - see wheel_source_accel.h. */
+static struct wheel_source_stats stats;
+
+void wheel_source_accel_stats(struct wheel_source_stats *out)
+{
+	*out = stats;
+}
+
+void wheel_source_accel_stats_reset(void)
+{
+	stats = (struct wheel_source_stats){ 0 };
+}
+
 static uint64_t now_us(void)
 {
 	return k_ticks_to_us_floor64(k_uptime_ticks());
@@ -160,6 +173,7 @@ void wheel_source_accel_step(uint64_t *next_us, uint32_t *period_us)
 	struct sensor_value v[3];
 	struct wheel_detector_result res;
 	uint64_t t;
+	int err;
 
 	/*
 	 * K_THREAD_DEFINE starts the sampling thread during kernel init, i.e.
@@ -218,13 +232,47 @@ void wheel_source_accel_step(uint64_t *next_us, uint32_t *period_us)
 	t = now_us();
 	if (t < *next_us) {
 		k_sleep(K_USEC((uint32_t)(*next_us - t)));
+		t = now_us();
 	}
-	*next_us += *period_us;
 
-	if (sensor_sample_fetch(accel) != 0 ||
-	    sensor_channel_get(accel, SENSOR_CHAN_ACCEL_XYZ, v) != 0) {
+	/*
+	 * Never leave the deadline in the past. One missed period is absorbed by
+	 * the arithmetic below; without this, a wake-up later than a period would
+	 * make every following pass fetch back to back - reading the same sample
+	 * over and over - until the deadline caught up.
+	 */
+	if (*next_us + *period_us < t) {
+		*next_us = t + *period_us;
+	} else {
+		*next_us += *period_us;
+	}
+
+	err = sensor_sample_fetch(accel);
+
+	if (err == -ENODATA) {
+		/*
+		 * "No new measurement yet" - the normal outcome of polling at the
+		 * configured rate, not a lost sample. Forwarding nothing is right,
+		 * and telling the detector would only drop a phase that is still
+		 * perfectly valid.
+		 */
+		stats.no_data++;
 		return;
 	}
+
+	if (err != 0 ||
+	    sensor_channel_get(accel, SENSOR_CHAN_ACCEL_XYZ, v) != 0) {
+		/*
+		 * A bus error: the samples in between never arrived, and all the
+		 * detector knows is that time passed. Tell it, so it drops the phase
+		 * instead of interpolating across a hole it cannot see.
+		 */
+		stats.lost++;
+		wheel_detector_samples_lost(&det);
+		return;
+	}
+
+	stats.samples++;
 
 	if (!det_ready) {
 		return;
