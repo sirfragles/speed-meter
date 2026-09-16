@@ -36,8 +36,16 @@
  *           the ride is over: links dropped, advertising stopped. What sleeps
  *           then depends on the board. With System OFF the SoC powers down and
  *           the next wheel movement is a reboot; without a wake line only the
- *           radio sleeps and a 1 Hz poll watches for the wheel, which works on
- *           any board at the cost of a few microamps.
+ *           radio sleeps and the device stays in System ON Idle - the CPU
+ *           stopping in WFI between 1 Hz polls, everything else still powered -
+ *           with that poll itself as the wake source. It works on any board, at
+ *           the cost of a few microamps.
+ *
+ * "System ON Idle" is a description, not a switch. On nRF54L15 it is what
+ * arch_cpu_idle() does; the SoC selects no HAS_PM and implements no
+ * pm_state_set(), so CONFIG_PM=y does not take - Kconfig says so, the build
+ * succeeds anyway, and the only related knob is CONFIG_SOC_NRF_FORCE_CONSTLAT
+ * (off, because it trades power for wake latency).
  *
  * Tier 3 is what makes a CR2032 last a season: a connected client would
  * otherwise keep the device awake around the clock.

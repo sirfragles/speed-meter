@@ -363,9 +363,22 @@ Dlatego tier 3 ma dwa zakończenia:
 | | stock | production |
 |---|---|---|
 | po 300 s | `bt_prepare_sleep()` — radio off | `sys_poweroff()` — System OFF |
+| tryb SoC | **System ON Idle** (CPU w WFI, RAM/LFCLK/GRTC działają) | wyłączony |
 | sensor | 1 Hz (już od tier 2) | 1 Hz |
 | co budzi | **polling 1 Hz** (`STANDBY_POLL_US`) | INT1 na P1.05, restart układu |
 | autostart bez przycisku | tak, do ~1 s | tak |
+
+> **System ON Idle to opis, nie przełącznik.** Na nRF54L15 to po prostu
+> `arch_cpu_idle()` → `__WFI()`. Jedyny pokrewny symbol to
+> `CONFIG_SOC_NRF_FORCE_CONSTLAT`, domyślnie wyłączony — włączenie go
+> **zwiększa** pobór (stała latencja budzenia kosztuje).
+>
+> **Nie sięgaj po `CONFIG_PM`.** nRF54L15 nie selektuje `HAS_PM` i nie ma
+> `pm_state_set()` (mają je tylko nrf54h i nrf92), więc `CONFIG_PM=y` **nie
+> wchodzi**. Kconfig to zgłasza — `PM` „was assigned the value 'y' but got the
+> value 'n'" — ale build kończy się `exit 0` i w `.config` jest `PM=n`. Da się
+> to przeoczyć, bo jedynym sygnałem jest ostrzeżenie Kconfig; nic się nie psuje
+> i nic się nie dzieje.
 
 Rdzeń zostaje w System ON idle i próbkuje co 1 s. To, co naprawdę zjada
 ogniwo, to radio — reklamowanie co 100 ms plus podtrzymywane łącza to dziesiątki

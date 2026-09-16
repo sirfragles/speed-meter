@@ -163,8 +163,9 @@ fact rather than a preference: whether the LIS2DH12 INT1 is wired to P1.05.
 |---|---|---|
 | INT1 wire | required | none |
 | Tier 2 (sensor 1 Hz, link kept) | yes | yes |
-| Tier 3, parking | System OFF, wake on rotation | radio off, 1 Hz poll wakes it |
-| What wakes it | INT1 on P1.05, a reboot | the sampling thread itself |
+| Tier 3, parking | System OFF, wake on rotation | **System ON Idle**, radio off |
+| Chip while parked | powered down | CPU in WFI; RAM, LFCLK, GRTC running |
+| What wakes it | INT1 on P1.05, a reboot | the 1 Hz poll, from the sampling thread |
 | Battery | a year on a CR2032 | a few µA more; the radio, not the core, is the load |
 
 `stock.conf` cannot reach System OFF even by accident: the option depends on

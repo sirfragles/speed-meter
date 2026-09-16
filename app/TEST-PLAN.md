@@ -273,7 +273,46 @@ Po zakończeniu: zaktualizować sekcję „Zakres ±g” w `tools/README.md` + c
 3. **Koło** (osobna sesja): `capture --seconds 30 --detect -o jazda1.csv` + `analyze`.
 4. **CSCS**: publikacja przeliczeń detektora (licznik obrotów + czas 1/1024 s) zamiast symulacji.
 
-## 8. Procedury awaryjne
+## 8. Pomiar poboru — dwa warianty, trzy stany
+
+Powód: „System ON Idle" i „rok na CR2032" to twierdzenia **o prądzie**, a nic
+w tym projekcie nie zostało zmierzone. Wariant `stock` nie ma czym wybudzić
+z System OFF, więc zostaje w System ON Idle — i właśnie dlatego trzeba wiedzieć,
+ile to kosztuje, a nie założyć, że „kilka µA".
+
+**Zmierz dla obu obrazów (`stock` i `production`) po trzy stany:**
+
+| Stan | Jak wejść | Czego dotyczy |
+|---|---|---|
+| tier 1 | koło się kręci (lub postój < 10 s) | próbkowanie 100 Hz + reklamowanie |
+| tier 2 | postój 10–300 s | sensor 1 Hz, **łącze BLE utrzymane** |
+| tier 3 | postój > 300 s | `stock`: radio off + System ON Idle; `production`: System OFF |
+
+**Czego oczekiwać — i co by to obaliło:**
+
+- tier 3 `stock` musi być **znacznie niżej niż tier 2 `stock`**. Jeśli nie jest,
+  `bt_prepare_sleep()` nie robi tego, co myślimy, i cała konstrukcja „zasypia
+  radio" jest fałszywa.
+- tier 3 `stock` będzie **wyżej** niż tier 3 `production` (System OFF). Różnica
+  to koszt System ON Idle — to jest ta liczba, której nie znamy.
+- Rząd wielkości do porównania: sam LIS2DH12 w trybie 1 Hz to ok. 2 µA.
+
+**Jak mierzyć:**
+
+- Nordic PPK2 (jeśli dostępny) — najprościej, mierzy wprost w torze CR2032.
+- Inaczej: bocznik w torze ogniwa + multimetr z zakresem µA. CR2032 ma własną
+  impedancję, więc mierzyć **na prawdziwym ogniwie**, nie z zasilacza.
+
+**Pułapka:** nie mierzyć z podłączonym debuggerem. SWD zasila część układu
+i potrafi trzymać zegary — wynik będzie zaniżony albo bezsensowny. Do pomiaru
+odłącz J-Linka i zasilaj wyłącznie z ogniwa.
+
+**Test funkcjonalny, nie tylko prądowy** (droga bez rebootu, więc nic jej nie
+resetuje poza nami): postój 300 s → obrót koła → reklamowanie ma wrócić.
+Sprawdź skanem BLE (`tools/wheel_cal.py scan`) i logiem RTT
+(`power: radio off, System ON idle, wheel polled at 1 Hz` → `power: radio on`).
+
+## 9. Procedury awaryjne
 
 - **RTT zawieszone** (WrOff ≠ RdOff w CB): znajdź `_SEGGER_RTT` w mapie i wyzeruj pola —
   `grep -m1 _SEGGER_RTT builds/speed_meter_diag/zephyr/zephyr.map` →
@@ -283,7 +322,7 @@ Po zakończeniu: zaktualizować sekcję „Zakres ±g” w `tools/README.md` + c
 - **SMP milczy** → sprawdź skanem, czy widać `0xFEBB`; `diag.conf` wymaga NET_BUF + ZCBOR + CRC (są).
 - **DAP nie wstaje przy < 2 V** → wymiana ogniwa; nie marnować czasu.
 
-## 9. Artefakty (stan 2026-09-14)
+## 10. Artefakty (stan 2026-09-14)
 
 | Co | Gdzie | Uwagi |
 |---|---|---|

@@ -343,15 +343,16 @@ __weak void wheel_power_soc_suspend(void)
 	 * no gpiote-instance property at all). Arming that pin and calling
 	 * sys_poweroff() would leave a board that never answers again.
 	 *
-	 * So the radio is what sleeps - and it is also the part that costs the
-	 * most. Advertising every 100 ms plus a maintained link runs to tens of
-	 * microamps, while the core in System ON idle between two 1 Hz polls
-	 * costs a few. The sampling thread keeps running at STANDBY_POLL_US
-	 * through all of this, and noticing the wheel turn there is what brings
-	 * the radio back. That poll, not a hardware event, is the wake source.
+	 * So the device stays in System ON Idle and the radio is what sleeps - and
+	 * the radio is also the part that costs the most. Advertising every 100 ms
+	 * plus a maintained link runs to tens of microamps, while the core stopping
+	 * in WFI between two 1 Hz polls costs a few. The sampling thread keeps
+	 * running at STANDBY_POLL_US through all of this, and noticing the wheel
+	 * turn there is what brings the radio back. That poll, not a hardware
+	 * event, is the wake source.
 	 */
 	bt_prepare_sleep();
-	LOG_INF("power: radio off, wheel polled at 1 Hz (no wake line on this board)");
+	LOG_INF("power: radio off, System ON idle, wheel polled at 1 Hz");
 #endif
 }
 
