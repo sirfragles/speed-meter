@@ -35,7 +35,7 @@ jobs:
   # through the production source file. Needs no cross toolchain, no hardware.
   # ---------------------------------------------------------------------------
   tests:
-    name: detector replay
+    name: host tests
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/zephyrproject-rtos/zephyr-build:main

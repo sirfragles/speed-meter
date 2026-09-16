@@ -24,6 +24,7 @@
 
 #include "csc.h"
 #include "wheel_config.h"
+#include "wheel_csc.h"
 #include "wheel_detector.h"
 
 #if IS_ENABLED(CONFIG_CSC_POWER_SAVE)
@@ -51,12 +52,8 @@ static bool det_ready;
  * slow enough to cost nothing, fast enough to notice the wheel moving again. */
 #define STANDBY_POLL_US 1000000U
 
-/* CSCS wheel event time runs in 1/1024 s units and is allowed to wrap. */
-#define CSCS_UNITS_PER_SEC 1024U
-#define CSCS_MAX_STEP      60000U
-
-static uint16_t wheel_time;
-static int64_t last_rev_ms;
+/* CSCS wire state: event-time clock and cumulative revolution counter. */
+static struct wheel_csc csc_state;
 static uint32_t applied_odr_hz;
 static uint8_t applied_range_g;
 
@@ -130,21 +127,14 @@ static void accel_apply_config(void)
 /** Publish one revolution, deriving the CSCS event time from real timestamps. */
 static void publish_revolution(const struct wheel_detector_result *res)
 {
-	int64_t now = k_uptime_get();
-
-	if (last_rev_ms != 0) {
-		uint32_t delta_ms = (uint32_t)(now - last_rev_ms);
-		uint32_t units = (delta_ms * CSCS_UNITS_PER_SEC) / 1000U;
-
-		wheel_time += (uint16_t)MIN(units, CSCS_MAX_STEP);
-	}
-	last_rev_ms = now;
+	struct wheel_csc_sample sample =
+		wheel_csc_revolution(&csc_state, res->revolutions, k_uptime_get());
 
 	LOG_DBG("wheel rev %u: %d.%01d km/h (dir %d, r=%d mm)", res->revolutions,
 		(int)res->speed_kmh, (int)(res->speed_kmh * 10.0f) % 10,
 		(int)res->direction, (int)(res->radius_m * 1000.0f));
 
-	csc_publish_wheel(res->revolutions, wheel_time);
+	csc_publish_wheel(sample.revolutions, sample.event_time);
 }
 
 static void accel_thread(void *arg1, void *arg2, void *arg3)
@@ -226,6 +216,14 @@ K_THREAD_DEFINE(accel_tid, 2048, accel_thread, NULL, NULL, NULL, K_PRIO_PREEMPT(
 
 int wheel_source_accel_init(void)
 {
+	/*
+	 * Device power-up is the one moment where the cumulative CSCS counter may
+	 * start from zero. Deliberately *not* in accel_apply_config(): a detector
+	 * re-initialisation is an internal event and must not be visible to the
+	 * host as the distance counter jumping backwards.
+	 */
+	wheel_csc_init(&csc_state);
+
 	if (!device_is_ready(accel)) {
 		LOG_ERR("accelerometer not ready");
 		return -ENODEV;

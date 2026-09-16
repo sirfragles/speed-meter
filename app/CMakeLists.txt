@@ -19,6 +19,10 @@ target_sources(app PRIVATE
 # persistence in NVS. Used by every wheel source and by the diagnostics shell.
 target_sources(app PRIVATE src/wheel_config.c)
 
+# CSCS wire state: the event-time clock and the cumulative revolution counter.
+# Free of Zephyr dependencies so it can be unit-tested on the host.
+target_sources(app PRIVATE src/wheel_csc.c)
+
 # CR2032 measurement through the SAADC internal VDD input + Battery Service.
 target_sources_ifdef(CONFIG_CSC_BATTERY app PRIVATE src/battery.c)
 
