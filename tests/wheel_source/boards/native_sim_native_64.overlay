@@ -1,0 +1,18 @@
+/*
+ * Copyright (c) 2026 Mateusz Żerebecki
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * A fake accelerometer the test drives directly, behind the alias
+ * wheel_source_accel.c looks up.
+ */
+
+/ {
+	aliases {
+		accel0 = &fake_accel;
+	};
+
+	fake_accel: fake-accel {
+		compatible = "vnd,fake-accel";
+		status = "okay";
+	};
+};

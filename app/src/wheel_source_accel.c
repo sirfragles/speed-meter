@@ -153,6 +153,104 @@ static void publish_revolution(const struct wheel_detector_result *res)
 	csc_publish_wheel(sample.revolutions, sample.event_time);
 }
 
+void wheel_source_accel_step(uint64_t *next_us, uint32_t *period_us)
+{
+	const struct wheel_config *cfg = wheel_config_get();
+	uint32_t want_us;
+	struct sensor_value v[3];
+	struct wheel_detector_result res;
+	uint64_t t;
+
+	/*
+	 * K_THREAD_DEFINE starts the sampling thread during kernel init, i.e.
+	 * before main() calls wheel_config_init() - cfg is all zeroes until then.
+	 * Bail out rather than divide by a zero ODR.
+	 */
+	if (cfg->odr_hz == 0U) {
+		k_sleep(K_MSEC(10));
+		return;
+	}
+
+	/* Pick up a `wheel cal set ...` without a reboot, including the
+	 * geometry the detector copies at init - circumference and rpm_max
+	 * used to be ignored here, leaving it computing with stale values. */
+	{
+		struct wheel_reconfig_keys wanted = {
+			.odr_hz = cfg->odr_hz,
+			.range_g = cfg->range_g,
+			.circ_mm = cfg->circ_mm,
+			.rpm_max = cfg->rpm_max,
+		};
+
+		if (wheel_reconfig_needed(&reconfig, &wanted)) {
+			if (!wheel_reconfig_may_retry(&reconfig, k_uptime_get())) {
+				/*
+				 * Fail-closed: the sensor and the detector may
+				 * disagree, so nothing is forwarded and no
+				 * revolution is published. The CSC counters
+				 * live outside this gate and keep their
+				 * values, so the host sees no gap beyond the
+				 * one that really happened.
+				 */
+				k_sleep(K_MSEC(100));
+				return;
+			}
+
+			if (!accel_apply_config()) {
+				wheel_reconfig_failed(&reconfig, k_uptime_get(),
+						      CONFIG_RETRY_MS);
+				k_sleep(K_MSEC(100));
+				return;
+			}
+
+			wheel_reconfig_applied(&reconfig, &wanted);
+			/* Force the cadence below to restart from "now". */
+			*period_us = 0;
+		}
+	}
+
+	want_us = power_standby() ? STANDBY_POLL_US : 1000000U / cfg->odr_hz;
+	if (want_us != *period_us) {
+		*period_us = want_us;
+		*next_us = now_us(); /* restart the cadence on a rate change */
+	}
+
+	t = now_us();
+	if (t < *next_us) {
+		k_sleep(K_USEC((uint32_t)(*next_us - t)));
+	}
+	*next_us += *period_us;
+
+	if (sensor_sample_fetch(accel) != 0 ||
+	    sensor_channel_get(accel, SENSOR_CHAN_ACCEL_XYZ, v) != 0) {
+		return;
+	}
+
+	if (!det_ready) {
+		return;
+	}
+
+	t = now_us();
+	res = wheel_detector_update(&det, (double)t / 1000000.0,
+				    (float)v[0].val1 + (float)v[0].val2 / 1000000.0f,
+				    (float)v[1].val1 + (float)v[1].val2 / 1000000.0f,
+				    (float)v[2].val1 + (float)v[2].val2 / 1000000.0f);
+
+	if (res.new_revolution) {
+		publish_revolution(&res);
+	}
+
+	/*
+	 * Hands the standstill/wake decision to wheel_power.c: it puts the
+	 * sensor (and, when nobody is connected, the SoC) to sleep after
+	 * CONFIG_CSC_POWER_IDLE_TIMEOUT_S without a revolution, and wakes
+	 * them up again on the first sign of movement. This is what makes
+	 * the device start measuring by itself when the bike moves.
+	 */
+	power_report(res.state != WHEEL_STATE_IDLE);
+}
+
+#ifndef CONFIG_ZTEST
 static void accel_thread(void *arg1, void *arg2, void *arg3)
 {
 	uint64_t next = 0;
@@ -163,104 +261,12 @@ static void accel_thread(void *arg1, void *arg2, void *arg3)
 	ARG_UNUSED(arg3);
 
 	for (;;) {
-		const struct wheel_config *cfg = wheel_config_get();
-		uint32_t want_us;
-		struct sensor_value v[3];
-		struct wheel_detector_result res;
-		uint64_t t;
-
-		/*
-		 * K_THREAD_DEFINE starts this thread during kernel init, i.e.
-		 * before main() calls wheel_config_init() - cfg is all zeroes
-		 * until then. Bail out rather than divide by a zero ODR.
-		 */
-		if (cfg->odr_hz == 0U) {
-			k_sleep(K_MSEC(10));
-			continue;
-		}
-
-		/* Pick up a `wheel cal set ...` without a reboot, including the
-		 * geometry the detector copies at init - circumference and rpm_max
-		 * used to be ignored here, leaving it computing with stale values. */
-		{
-			struct wheel_reconfig_keys wanted = {
-				.odr_hz = cfg->odr_hz,
-				.range_g = cfg->range_g,
-				.circ_mm = cfg->circ_mm,
-				.rpm_max = cfg->rpm_max,
-			};
-
-			if (wheel_reconfig_needed(&reconfig, &wanted)) {
-				if (!wheel_reconfig_may_retry(&reconfig, k_uptime_get())) {
-					/*
-					 * Fail-closed: the sensor and the detector may
-					 * disagree, so nothing is forwarded and no
-					 * revolution is published. The CSC counters
-					 * live outside this gate and keep their
-					 * values, so the host sees no gap beyond the
-					 * one that really happened.
-					 */
-					k_sleep(K_MSEC(100));
-					continue;
-				}
-
-				if (!accel_apply_config()) {
-					wheel_reconfig_failed(&reconfig,
-							      k_uptime_get(),
-							      CONFIG_RETRY_MS);
-					k_sleep(K_MSEC(100));
-					continue;
-				}
-
-				wheel_reconfig_applied(&reconfig, &wanted);
-				/* Force the cadence below to restart from "now". */
-				period_us = 0;
-			}
-		}
-
-		want_us = power_standby() ? STANDBY_POLL_US : 1000000U / cfg->odr_hz;
-		if (want_us != period_us) {
-			period_us = want_us;
-			next = now_us(); /* restart the cadence on a rate change */
-		}
-
-		t = now_us();
-		if (t < next) {
-			k_sleep(K_USEC((uint32_t)(next - t)));
-		}
-		next += period_us;
-
-		if (sensor_sample_fetch(accel) != 0 ||
-		    sensor_channel_get(accel, SENSOR_CHAN_ACCEL_XYZ, v) != 0) {
-			continue;
-		}
-
-		if (!det_ready) {
-			continue;
-		}
-
-		t = now_us();
-		res = wheel_detector_update(&det, (double)t / 1000000.0,
-					    (float)v[0].val1 + (float)v[0].val2 / 1000000.0f,
-					    (float)v[1].val1 + (float)v[1].val2 / 1000000.0f,
-					    (float)v[2].val1 + (float)v[2].val2 / 1000000.0f);
-
-		if (res.new_revolution) {
-			publish_revolution(&res);
-		}
-
-		/*
-		 * Hands the standstill/wake decision to wheel_power.c: it puts the
-		 * sensor (and, when nobody is connected, the SoC) to sleep after
-		 * CONFIG_CSC_POWER_IDLE_TIMEOUT_S without a revolution, and wakes
-		 * them up again on the first sign of movement. This is what makes
-		 * the device start measuring by itself when the bike moves.
-		 */
-		power_report(res.state != WHEEL_STATE_IDLE);
+		wheel_source_accel_step(&next, &period_us);
 	}
 }
 
 K_THREAD_DEFINE(accel_tid, 2048, accel_thread, NULL, NULL, NULL, K_PRIO_PREEMPT(7), 0, 0);
+#endif /* !CONFIG_ZTEST */
 
 int wheel_source_accel_init(void)
 {

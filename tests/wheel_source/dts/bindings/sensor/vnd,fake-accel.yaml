@@ -1,0 +1,8 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+description: Controllable accelerometer used by the wheel source integration test
+
+# 'vnd' is Zephyr's registered stand-in vendor prefix for examples and tests.
+compatible: "vnd,fake-accel"
+
+include: base.yaml

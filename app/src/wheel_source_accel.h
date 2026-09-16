@@ -23,11 +23,26 @@
 #ifndef SPEED_METER_WHEEL_SOURCE_ACCEL_H_
 #define SPEED_METER_WHEEL_SOURCE_ACCEL_H_
 
+#include <stdint.h>
+
 /**
  * @brief Start sampling the accelerometer and publishing wheel revolutions.
  *
  * @return 0 on success, negative errno if the sensor is not ready.
  */
 int wheel_source_accel_init(void);
+
+/**
+ * @brief One pass of the sampling loop.
+ *
+ * The sampling thread is a loop around this. It is public so the integration
+ * test in tests/wheel_source can drive it step by step: a thread racing the
+ * scheduler and the kernel clock is not something a test can make assertions
+ * about.
+ *
+ * @param next_us    cadence deadline, carried between passes
+ * @param period_us  current sampling period, carried between passes
+ */
+void wheel_source_accel_step(uint64_t *next_us, uint32_t *period_us);
 
 #endif /* SPEED_METER_WHEEL_SOURCE_ACCEL_H_ */

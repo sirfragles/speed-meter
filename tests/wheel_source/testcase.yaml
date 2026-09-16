@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  app.wheel_source:
+    # The path between the sensor driver and the CSCS wire: configuration,
+    # discontinuity handling and the sampling cadence.
+    platform_allow:
+      - native_sim/native/64
+    tags:
+      - sensor
+      - integration
+    timeout: 60
