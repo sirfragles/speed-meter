@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Mateusz Żerebecki
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  app.wheel_csc:
+    # The CSCS wire encoding: what the host is entitled to assume about the
+    # event time and the cumulative revolution counter.
+    platform_allow:
+      - native_sim/native/64
+    tags:
+      - bluetooth
+      - unit
+    timeout: 60

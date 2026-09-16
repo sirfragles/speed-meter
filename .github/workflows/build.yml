@@ -58,18 +58,20 @@ jobs:
           west init -l speed-meter
           west update --narrow
 
-      - name: Run detector tests
+      - name: Run host tests
         shell: bash
         run: |
           set -eux
-          west twister -T speed-meter/tests/wheel_detector \
+          # The whole tree, not one suite: a new tests/<name>/ gets picked up
+          # without another workflow edit.
+          west twister -T speed-meter/tests \
             -p native_sim/native/64 -O twister-out --inline-logs -v
 
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: detector-test-report
+          name: host-test-report
           path: |
             twister-out/twister.xml
             twister-out/**/handler.log
